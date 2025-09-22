@@ -1,0 +1,11 @@
+{
+    "dart.flutterSdkPath": null,
+    "dart.lineLength": 80,
+    "dart.previewFlutterUiGuides": true,
+    "dart.previewFlutterUiGuidesCustomTracking": true,
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.fixAll": "explicit",
+        "source.organizeImports": "explicit"
+    }
+}

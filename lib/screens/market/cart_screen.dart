@@ -32,10 +32,110 @@ class _CartScreenState extends State<CartScreen> {
       });
 
       // Use API to get cart items
-      final items = await _apiService.getCartItems();
+      final allItems = await _apiService.getCartItems();
+
+      print('🛒 CartScreen: Received ${allItems.length} items from API');
+      for (int i = 0; i < allItems.length; i++) {
+        print('🛒 CartScreen: Item $i: ${allItems[i]}');
+      }
+
+      // Filter to show only recent items (last 24 hours) to avoid showing old transactions
+      final now = DateTime.now();
+      final items = allItems.where((item) {
+        final createdAt = item['createdAt'] ?? item['updatedAt'];
+        if (createdAt == null) return false;
+
+        final itemDate = DateTime.parse(createdAt);
+        final hoursDiff = now.difference(itemDate).inHours;
+
+        print(
+            '🛒 CartScreen: Item ${item['medicineName']} created ${hoursDiff} hours ago');
+        return hoursDiff <= 24; // Only show items from last 24 hours
+      }).toList();
+
+      print(
+          '🛒 CartScreen: Filtered to ${items.length} recent items (last 24 hours)');
+
+      // Group items by transaction to show complete invoices
+      final Map<String, List<Map<String, dynamic>>> groupedByTransaction = {};
+      for (var item in items) {
+        final transactionId =
+            item['transactionId'] ?? item['transactionNumber'] ?? 'unknown';
+        if (!groupedByTransaction.containsKey(transactionId)) {
+          groupedByTransaction[transactionId] = [];
+        }
+        groupedByTransaction[transactionId]!.add(item);
+      }
+
+      // Convert grouped items to invoice format
+      final invoiceItems = groupedByTransaction.entries.map((entry) {
+        final transactionId = entry.key;
+        final items = entry.value;
+        final firstItem = items.first;
+
+        print(
+            '🛒 CartScreen: Processing transaction $transactionId with ${items.length} items');
+        print('🛒 CartScreen: First item: $firstItem');
+
+        // Calculate total amount
+        final totalAmount = items.fold<double>(
+            0.0, (sum, item) => sum + (item['totalPrice'] ?? 0.0));
+
+        print('🛒 CartScreen: Calculated total amount: $totalAmount');
+
+        final invoice = {
+          'transactionId': transactionId,
+          'transactionNumber': firstItem['transactionNumber'],
+          'invoiceNumber': firstItem['transactionNumber'],
+          'pharmacyName': 'ABC Pharmacy',
+          'pharmacyId': firstItem['transactionId'],
+          'date': firstItem['createdAt'] != null
+              ? DateTime.parse(firstItem['createdAt'])
+                  .toIso8601String()
+                  .split('T')[0]
+              : DateTime.now().toIso8601String().split('T')[0],
+          'invoiceType': 'complete',
+          'totalAmount': totalAmount,
+          'discount': 0.0,
+          'finalAmount': totalAmount,
+          'medicines': items.map((item) {
+            print('🛒 CartScreen: Processing medicine item: $item');
+            return {
+              'id': item['medicineId']['_id'] ?? item['medicineId']['id'],
+              'name': item['medicineName'] ?? item['medicineId']['name'],
+              'genericName':
+                  item['genericName'] ?? item['medicineId']['genericName'],
+              'activeIngredient':
+                  item['genericName'] ?? item['medicineId']['genericName'],
+              'category': 'Medicine',
+              'manufacturer': item['manufacturer'] ?? 'Unknown',
+              'price': item['unitPrice'] ?? item['medicineId']['price'] ?? 0.0,
+              'quantity': item['quantity'] ?? 1,
+              'form': item['form'] ?? item['medicineId']['form'] ?? 'Tablet'
+            };
+          }).toList(),
+          'status': 'completed',
+          'createdAt': firstItem['createdAt']
+        };
+
+        print('🛒 CartScreen: Created invoice: $invoice');
+        return invoice;
+      }).toList();
+
+      print('🛒 CartScreen: Converted to ${invoiceItems.length} invoices');
+      for (int i = 0; i < invoiceItems.length; i++) {
+        print('🛒 CartScreen: Invoice $i: ${invoiceItems[i]}');
+      }
+
+      print('🛒 CartScreen: Final invoice items: ${invoiceItems.length}');
+      for (int i = 0; i < invoiceItems.length; i++) {
+        final item = invoiceItems[i];
+        print(
+            '🛒 CartScreen: Invoice $i: totalAmount=${item['totalAmount']}, finalAmount=${item['finalAmount']}');
+      }
 
       setState(() {
-        _cartItems = items;
+        _cartItems = invoiceItems;
         _isLoading = false;
       });
     } catch (e) {
@@ -62,10 +162,16 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   double get _subtotal {
-    return _cartItems.fold(
-        0,
-        (sum, item) =>
-            sum + ((item['price'] ?? 0.0) * (item['quantity'] ?? 1)));
+    print('🛒 CartScreen: Calculating subtotal for ${_cartItems.length} items');
+    double total = 0.0;
+    for (int i = 0; i < _cartItems.length; i++) {
+      final item = _cartItems[i];
+      final totalAmount = item['totalAmount'] ?? item['finalAmount'] ?? 0.0;
+      print('🛒 CartScreen: Item $i: totalAmount=$totalAmount');
+      total += totalAmount;
+    }
+    print('🛒 CartScreen: Final subtotal: $total');
+    return total;
   }
 
   double get _tax => _subtotal * 0.05; // 5% tax
@@ -136,12 +242,71 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   Future<void> _clearCart() async {
-    try {
-      await _apiService.clearCart();
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          AppLocalizations.of(context)!.clearAll,
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            color: AppTheme.errorRed,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to remove all items from your cart?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(AppLocalizations.of(context)!.cancel),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.errorRed,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(
+              AppLocalizations.of(context)!.clearAll,
+            ),
+          ),
+        ],
+      ),
+    );
 
-      setState(() {
-        _cartItems.clear();
-      });
+    if (confirmed != true) return;
+
+    try {
+      print('🗑️ Cart: Clearing all cart items...');
+
+      // Get all cart items first
+      final allItems = await _apiService.getCartItems();
+      print('🗑️ Cart: Found ${allItems.length} items to process');
+
+      // Group items by transaction to get unique transaction IDs
+      final Set<String> transactionIds = {};
+      for (var item in allItems) {
+        final transactionId =
+            item['transactionId'] ?? item['transactionNumber'];
+        if (transactionId != null) {
+          transactionIds.add(transactionId.toString());
+        }
+      }
+
+      print(
+          '🗑️ Cart: Found ${transactionIds.length} unique transactions to remove');
+
+      // Remove each transaction individually to ensure they are permanently deleted
+      for (var transactionId in transactionIds) {
+        print('🗑️ Cart: Removing transaction with ID: $transactionId');
+        await _apiService.removeFromCart(transactionId);
+      }
+
+      print('🗑️ Cart: All transactions removed successfully');
+
+      // Update UI by reloading cart items
+      await _loadCartItems();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -149,16 +314,18 @@ class _CartScreenState extends State<CartScreen> {
             content:
                 Text(AppLocalizations.of(context)!.cartClearedSuccessfully),
             backgroundColor: AppTheme.successGreen,
+            duration: const Duration(seconds: 2),
           ),
         );
       }
     } catch (e) {
+      print('❌ Cart: Failed to clear cart: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-                '${AppLocalizations.of(context)!.failedToLoadCart}: ${e.toString()}'),
+            content: Text('Failed to clear cart: ${e.toString()}'),
             backgroundColor: AppTheme.errorRed,
+            duration: const Duration(seconds: 3),
           ),
         );
       }
@@ -260,9 +427,16 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   Widget _buildMedicineCartItem(Map<String, dynamic> item, ThemeData theme) {
+    print('🛒 Building medicine cart item: $item');
+
     final bool hasDiscount = (item['discount'] ?? 0) > 0;
     final bool isPrescriptionRequired = !(item['isOTC'] ?? true);
-    final double itemTotal = (item['price'] ?? 0.0) * (item['quantity'] ?? 1);
+    final double unitPrice = item['unitPrice'] ?? item['price'] ?? 0.0;
+    final int quantity = item['quantity'] ?? 1;
+    final double itemTotal = unitPrice * quantity;
+
+    print(
+        '🛒 Medicine details: unitPrice=$unitPrice, quantity=$quantity, total=$itemTotal');
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
@@ -396,7 +570,9 @@ class _CartScreenState extends State<CartScreen> {
                   children: [
                     // Medicine Name
                     Text(
-                      item['name'] ?? 'Unknown Medicine',
+                      item['medicineName'] ??
+                          item['name'] ??
+                          'Unknown Medicine',
                       style: theme.textTheme.bodyLarge?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
@@ -434,7 +610,7 @@ class _CartScreenState extends State<CartScreen> {
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
-                            '\$${(item['price'] ?? 0.0).toStringAsFixed(2)}',
+                            '\$${unitPrice.toStringAsFixed(2)}',
                             style: theme.textTheme.bodyLarge?.copyWith(
                               color: AppTheme.primaryTeal,
                               fontWeight: FontWeight.bold,
@@ -657,10 +833,27 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   Widget _buildInvoiceCartItem(Map<String, dynamic> item, ThemeData theme) {
-    final double totalAmount = item['totalAmount'] ?? 0.0;
-    final double discount = item['discount'] ?? 0.0;
-    final double finalAmount = item['finalAmount'] ?? totalAmount;
-    final int medicineCount = item['medicines']?.length ?? 0;
+    print('🛒 CartScreen: Building invoice cart item: $item');
+
+    // Extract data from the item structure
+    final String invoiceNumber =
+        item['invoiceNumber'] ?? item['transactionNumber'] ?? 'INV-000';
+    final String pharmacyName = item['pharmacyName'] ?? 'Pharmacy';
+    final String invoiceDate = item['date'] ??
+        (item['createdAt'] != null
+            ? DateTime.parse(item['createdAt'])
+                .toLocal()
+                .toString()
+                .split(' ')[0]
+            : '');
+    final String invoiceType = item['invoiceType'] ?? 'Complete';
+    final int medicineCount = (item['medicines'] as List?)?.length ?? 1;
+    final double totalAmount = (item['totalAmount'] ?? 0.0) as double;
+    final double discount = (item['discount'] ?? 0.0) as double;
+    final double finalAmount = (item['finalAmount'] ?? totalAmount) as double;
+
+    print(
+        '🛒 CartScreen: Extracted data - invoiceNumber: $invoiceNumber, pharmacyName: $pharmacyName, invoiceDate: $invoiceDate, invoiceType: $invoiceType, medicineCount: $medicineCount, totalAmount: $totalAmount');
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -708,14 +901,14 @@ class _CartScreenState extends State<CartScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      item['invoiceNumber'] ?? 'Invoice',
+                      invoiceNumber,
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                         color: AppTheme.primaryTeal,
                       ),
                     ),
                     Text(
-                      item['pharmacyName'] ?? 'Pharmacy',
+                      pharmacyName,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: Colors.grey[600],
                       ),
@@ -724,7 +917,7 @@ class _CartScreenState extends State<CartScreen> {
                 ),
               ),
               IconButton(
-                onPressed: () => _removeFromCart(item['id']),
+                onPressed: () => _removeInvoiceFromCart(item),
                 icon: const Icon(
                   Icons.delete_outline,
                   color: AppTheme.errorRed,
@@ -760,7 +953,7 @@ class _CartScreenState extends State<CartScreen> {
                       ),
                     ),
                     Text(
-                      item['date'] ?? '',
+                      invoiceDate,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w500,
                       ),
@@ -778,9 +971,7 @@ class _CartScreenState extends State<CartScreen> {
                       ),
                     ),
                     Text(
-                      item['invoiceType'] == 'complete'
-                          ? AppLocalizations.of(context)!.completeInvoice
-                          : AppLocalizations.of(context)!.partialInvoice,
+                      invoiceType,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w500,
                       ),
@@ -798,7 +989,7 @@ class _CartScreenState extends State<CartScreen> {
                       ),
                     ),
                     Text(
-                      '$medicineCount Items',
+                      '$medicineCount Item',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w500,
                       ),
@@ -860,55 +1051,65 @@ class _CartScreenState extends State<CartScreen> {
               ),
             ),
             children: [
-              ...item['medicines']?.map<Widget>((medicine) {
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[50],
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: Colors.grey[200]!),
+              // Show all medicines in the invoice
+              ...((item['medicines'] as List?) ?? []).map<Widget>((medicine) {
+                print('🛒 CartScreen: Displaying medicine: $medicine');
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[50],
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.grey[200]!),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _getCategoryIcon(medicine['form'] ?? 'Tablet'),
+                        color: AppTheme.primaryTeal,
+                        size: 16,
                       ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            _getCategoryIcon(medicine['category'] ?? 'Tablet'),
-                            color: AppTheme.primaryTeal,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  medicine['name'] ?? 'N/A',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                                Text(
-                                  medicine['manufacturer'] ?? 'N/A',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: Colors.grey[600],
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ],
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              medicine['name'] ?? 'N/A',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
-                          ),
-                          Text(
-                            '${medicine['price']} EGP',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              fontWeight: FontWeight.w500,
-                              color: AppTheme.successGreen,
+                            Text(
+                              medicine['manufacturer'] ?? 'N/A',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: Colors.grey[600],
+                                fontSize: 10,
+                              ),
                             ),
-                          ),
-                        ],
+                            if (medicine['quantity'] != null &&
+                                (medicine['quantity'] as int) > 1)
+                              Text(
+                                'Qty: ${medicine['quantity']}',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: Colors.grey[500],
+                                  fontSize: 9,
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
-                    );
-                  }).toList() ??
-                  [],
+                      Text(
+                        '${medicine['price']} EGP',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w500,
+                          color: AppTheme.successGreen,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
             ],
           ),
         ],
@@ -1442,6 +1643,88 @@ class _CartScreenState extends State<CartScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to remove item: ${e.toString()}'),
+            backgroundColor: AppTheme.errorRed,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _removeInvoiceFromCart(Map<String, dynamic> invoice) async {
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text(
+          'Remove Invoice',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: AppTheme.errorRed,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to remove this invoice from your cart?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(AppLocalizations.of(context)!.cancel),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.errorRed,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final String? transactionId = invoice['transactionId'];
+      if (transactionId == null) {
+        throw Exception('Transaction ID not found');
+      }
+
+      print('🗑️ Cart: Removing invoice with transaction ID: $transactionId');
+
+      // Get all cart items for this transaction
+      final allItems = await _apiService.getCartItems();
+      final itemsToRemove = allItems.where((item) {
+        final itemTransactionId =
+            item['transactionId'] ?? item['transactionNumber'];
+        return itemTransactionId == transactionId;
+      }).toList();
+
+      print('🗑️ Cart: Found ${itemsToRemove.length} items to remove');
+
+      // Remove the transaction directly using transaction ID
+      print('🗑️ Cart: Removing transaction with ID: $transactionId');
+      await _apiService.removeFromCart(transactionId);
+
+      // Reload cart items to refresh the UI
+      await _loadCartItems();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(AppLocalizations.of(context)!.itemRemovedFromCart),
+            backgroundColor: AppTheme.successGreen,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Cart: Failed to remove invoice: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to remove invoice: ${e.toString()}'),
             backgroundColor: AppTheme.errorRed,
             duration: const Duration(seconds: 3),
           ),

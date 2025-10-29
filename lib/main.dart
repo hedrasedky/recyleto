@@ -2,21 +2,36 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
-import 'providers/auth_provider.dart';
-import 'providers/dashboard_provider.dart';
-import 'providers/locale_provider.dart';
-import 'providers/theme_provider.dart';
-import 'services/payment_service.dart';
-import 'utils/app_routes.dart';
-import 'utils/app_theme.dart';
-import 'l10n/app_localizations.dart';
+import 'package:recyleto_app/providers/auth_provider.dart';
+import 'package:recyleto_app/providers/dashboard_provider.dart';
+import 'package:recyleto_app/providers/locale_provider.dart';
+import 'package:recyleto_app/providers/theme_provider.dart';
+import 'package:recyleto_app/services/api_service.dart';
+// import 'package:recyleto_app/services/payment_service.dart'; // Temporarily disabled
+import 'package:recyleto_app/utils/app_routes.dart';
+import 'package:recyleto_app/utils/app_theme.dart';
+import 'package:recyleto_app/l10n/app_localizations.dart';
 
-void main() {
+void main() async {
+  print('🚀 main() function started');
+  WidgetsFlutterBinding.ensureInitialized();
+  print('🚀 WidgetsFlutterBinding.ensureInitialized() completed');
+
+  // Initialize API service to load stored token2
+  print('🚀 Initializing ApiService...');
+  await ApiService().initialize();
+  print('🚀 ApiService initialization completed');
+
+  print('🚀 Starting RecyletoApp...');
   runApp(const RecyletoApp());
 }
 
 class RecyletoApp extends StatelessWidget {
   const RecyletoApp({super.key});
+
+  // Create RouteObserver for tracking navigation
+  static final RouteObserver<PageRoute> routeObserver =
+      RouteObserver<PageRoute>();
 
   @override
   Widget build(BuildContext context) {
@@ -45,7 +60,8 @@ class RecyletoApp extends StatelessWidget {
             ],
             initialRoute: AppRoutes.splash,
             onGenerateRoute: AppRoutes.generateRoute,
-            navigatorKey: navigatorKey, // For Flutterwave integration
+            navigatorObservers: [routeObserver],
+            // navigatorKey: navigatorKey, // For Flutterwave integration - temporarily disabled
           );
         },
       ),

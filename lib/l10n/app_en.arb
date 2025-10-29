@@ -942,7 +942,7 @@
   "invoiceDate": "Invoice Date",
   "finalAmount": "Final Amount",
   "medicinesInInvoice": "Medicines in Invoice",
-  "addCompleteInvoice": "Add Complete Invoice",
+  "addCompleteInvoice": "Add Invoice",
   "selectPartial": "Select Partial",
   "selectMedicines": "Select Medicines",
   "addSelected": "Add Selected",
@@ -972,5 +972,6 @@
   "mustBuyComplete": "Must buy complete",
   "canSelectPartial": "Can select partial",
   "addCompleteInvoice": "Add Complete Invoice",
-  "selectPartialInvoice": "Select Partial Invoice"
+  "selectPartialInvoice": "Select Partial Invoice",
+  "selectMedicines": "Select Medicines"
 }

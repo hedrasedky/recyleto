@@ -4,7 +4,6 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:recyleto_app/l10n/app_localizations.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
@@ -42,6 +41,7 @@ class _RegisterPharmacyScreenState extends State<RegisterPharmacyScreen> {
   void initState() {
     super.initState();
     _checkAuthStatus();
+    _loadSavedData();
   }
 
   void _checkAuthStatus() {
@@ -51,6 +51,37 @@ class _RegisterPharmacyScreenState extends State<RegisterPharmacyScreen> {
         Navigator.of(context).pushReplacementNamed('/home');
       }
     });
+  }
+
+  Future<void> _loadSavedData() async {
+    // Load saved form data if available
+    // This helps preserve user input in case of errors
+    try {
+      // You can implement SharedPreferences here to save/load form data
+      print('🔍 Loading saved form data...');
+    } catch (e) {
+      print('❌ Error loading saved data: $e');
+    }
+  }
+
+  Future<void> _saveFormData() async {
+    // Save form data to prevent loss on errors
+    try {
+      final formData = {
+        'pharmacyName': _pharmacyNameController.text,
+        'businessEmail': _emailController.text,
+        'businessPhone': _phoneController.text,
+        'mobileNumber': _mobileController.text,
+        'street': _streetController.text,
+        'city': _cityController.text,
+        'state': _stateController.text,
+        'zipCode': _zipCodeController.text,
+      };
+      print('🔍 Saving form data: $formData');
+      // You can implement SharedPreferences here to save form data
+    } catch (e) {
+      print('❌ Error saving form data: $e');
+    }
   }
 
   @override
@@ -86,6 +117,9 @@ class _RegisterPharmacyScreenState extends State<RegisterPharmacyScreen> {
 
     setState(() => _isLoading = true);
     try {
+      // Save form data before registration attempt
+      await _saveFormData();
+
       // Prepare pharmacy data
       final pharmacyData = {
         'pharmacyName': _pharmacyNameController.text.trim(),
@@ -93,6 +127,7 @@ class _RegisterPharmacyScreenState extends State<RegisterPharmacyScreen> {
         'businessPhone': _phoneController.text.trim(),
         'mobileNumber': _mobileController.text.trim(),
         'password': _passwordController.text,
+        'confirmPassword': _confirmPasswordController.text,
         'businessAddress': {
           'street': _streetController.text.trim(),
           'city': _cityController.text.trim(),
@@ -117,8 +152,10 @@ class _RegisterPharmacyScreenState extends State<RegisterPharmacyScreen> {
       }
     } catch (e) {
       if (mounted) {
+        // Don't clear form data on error - preserve user input
         _showErrorMessage(
             'An error occurred during registration: ${e.toString()}');
+        print('Registration error: $e');
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);

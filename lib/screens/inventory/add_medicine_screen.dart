@@ -24,6 +24,7 @@ class _AddMedicineScreenState extends State<AddMedicineScreen> {
   final ApiService _apiService = ApiService();
 
   String? _selectedCategory;
+  String? _selectedForm;
   DateTime _selectedExpiryDate = DateTime.now().add(const Duration(days: 365));
   bool _isOTC = true;
   bool _isLoading = false;
@@ -49,6 +50,24 @@ class _AddMedicineScreenState extends State<AddMedicineScreen> {
         AppLocalizations.of(context)!.infectiousDiseases,
         AppLocalizations.of(context)!.emergencyMedicine,
         AppLocalizations.of(context)!.other,
+      ];
+
+  List<String> get _medicineForms => [
+        'Tablet',
+        'Capsule',
+        'Syrup',
+        'Injection',
+        'Cream',
+        'Ointment',
+        'Drops',
+        'Powder',
+        'Patch',
+        'Suppository',
+        'Inhaler',
+        'Gel',
+        'Lotion',
+        'Spray',
+        'Solution',
       ];
 
   @override
@@ -186,6 +205,9 @@ class _AddMedicineScreenState extends State<AddMedicineScreen> {
                         return null;
                       },
                     ),
+                    const SizedBox(height: 16),
+
+                    _buildCategoryDropdown(),
                     const SizedBox(height: 16),
 
                     _buildFormDropdown(),
@@ -370,7 +392,7 @@ class _AddMedicineScreenState extends State<AddMedicineScreen> {
     );
   }
 
-  Widget _buildFormDropdown() {
+  Widget _buildCategoryDropdown() {
     return DropdownButtonFormField<String>(
       value: _selectedCategory,
       decoration: InputDecoration(
@@ -407,7 +429,51 @@ class _AddMedicineScreenState extends State<AddMedicineScreen> {
       },
       validator: (value) {
         if (value == null || value.isEmpty) {
-          return AppLocalizations.of(context)!.pleaseSelectForm;
+          return 'Please select a category';
+        }
+        return null;
+      },
+    );
+  }
+
+  Widget _buildFormDropdown() {
+    return DropdownButtonFormField<String>(
+      value: _selectedForm,
+      decoration: InputDecoration(
+        labelText: 'Medicine Form *',
+        prefixIcon: const Icon(Icons.medication, color: AppTheme.primaryTeal),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppTheme.primaryTeal, width: 2),
+        ),
+      ),
+      items: _medicineForms.map((form) {
+        return DropdownMenuItem(
+          value: form,
+          child: Row(
+            children: [
+              Icon(
+                _getFormIcon(form),
+                size: 20,
+                color: AppTheme.primaryTeal,
+              ),
+              const SizedBox(width: 8),
+              Text(form),
+            ],
+          ),
+        );
+      }).toList(),
+      onChanged: (value) {
+        setState(() {
+          _selectedForm = value!;
+        });
+      },
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return 'Please select medicine form';
         }
         return null;
       },
@@ -532,25 +598,49 @@ class _AddMedicineScreenState extends State<AddMedicineScreen> {
     });
 
     try {
+      print('💊 Add Medicine Screen: Starting to save medicine...');
       await _apiService.initialize();
 
-      // Prepare medicine data for API
+      // Normalize form to allowed backend values
+      final allowedForms = {
+        'Tablet',
+        'Capsule',
+        'Syrup',
+        'Injection',
+        'Ointment',
+        'Cream',
+        'Drops',
+        'Inhaler',
+        'Other'
+      };
+      final selectedForm = _selectedForm ?? 'Tablet';
+      final normalizedForm =
+          allowedForms.contains(selectedForm) ? selectedForm : 'Other';
+
+      // Prepare medicine data for API (all required fields)
       final medicineData = {
         'name': _medicineNameController.text.trim(),
         'genericName': _genericNameController.text.trim(),
-        'category': _selectedCategory,
+        'form': normalizedForm, // Ensure backend-allowed form
         'packSize': _packSizeController.text.trim(),
         'quantity': int.tryParse(_quantityController.text) ?? 0,
         'price': double.tryParse(_priceController.text) ?? 0.0,
         'expiryDate': _selectedExpiryDate.toIso8601String(),
         'manufacturer': _manufacturerController.text.trim(),
-        'description': _descriptionController.text.trim(),
-        'isOTC': _isOTC,
-        // category can be generated automatically or left empty if not required
+        'batchNumber':
+            'BATCH${DateTime.now().millisecondsSinceEpoch}', // Generate batch number
+        'category': _selectedCategory ?? 'Other', // Add category field
+        'requiresPrescription': 'false', // Default to false (OTC)
       };
 
+      print('💊 Add Medicine Screen: Medicine data prepared: $medicineData');
+      print(
+          '💊 Add Medicine Screen: Selected form: $_selectedForm → normalized: $normalizedForm');
+      print('💊 Add Medicine Screen: About to call API...');
+
       // Call API to add medicine
-      await _apiService.addMedicine(medicineData);
+      final result = await _apiService.addMedicine(medicineData);
+      print('💊 Add Medicine Screen: API call successful! Result: $result');
 
       if (mounted) {
         // Show success message
@@ -578,8 +668,9 @@ class _AddMedicineScreenState extends State<AddMedicineScreen> {
         Navigator.of(context).pop(true);
       }
     } catch (e) {
+      print('❌ Add Medicine Error: ${e.toString()}');
       if (mounted) {
-        // Show error message
+        // Show error message with details
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
@@ -588,7 +679,7 @@ class _AddMedicineScreenState extends State<AddMedicineScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    AppLocalizations.of(context)!.failedToAddMedicine,
+                    'Failed to add medicine: ${e.toString()}',
                     style: const TextStyle(color: Colors.white),
                   ),
                 ),
@@ -742,6 +833,43 @@ class _AddMedicineScreenState extends State<AddMedicineScreen> {
       case 'emergency medicine':
       case 'أدوية الطوارئ':
         return Icons.emergency;
+      default:
+        return Icons.medication;
+    }
+  }
+
+  IconData _getFormIcon(String form) {
+    switch (form.toLowerCase()) {
+      case 'tablet':
+        return Icons.medication;
+      case 'capsule':
+        return Icons.circle;
+      case 'syrup':
+        return Icons.local_drink;
+      case 'injection':
+        return Icons.vaccines;
+      case 'cream':
+        return Icons.face;
+      case 'ointment':
+        return Icons.healing;
+      case 'drops':
+        return Icons.water_drop;
+      case 'powder':
+        return Icons.grain;
+      case 'patch':
+        return Icons.medical_services;
+      case 'suppository':
+        return Icons.medication_liquid;
+      case 'inhaler':
+        return Icons.air;
+      case 'gel':
+        return Icons.opacity;
+      case 'lotion':
+        return Icons.water;
+      case 'spray':
+        return Icons.air;
+      case 'solution':
+        return Icons.science;
       default:
         return Icons.medication;
     }

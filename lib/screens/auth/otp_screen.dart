@@ -37,6 +37,8 @@ class _OTPScreenState extends State<OTPScreen> {
   @override
   void initState() {
     super.initState();
+    print(
+        '🔍 OTP Screen initialized with email: "${widget.email}" and purpose: "${widget.purpose}"');
     _startResendCountdown();
   }
 
@@ -82,6 +84,8 @@ class _OTPScreenState extends State<OTPScreen> {
 
     try {
       String otp = _controllers.map((controller) => controller.text).join();
+      print('🔍 OTP Screen: Verifying OTP "$otp" for email "${widget.email}"');
+
       if (otp.length != 6) {
         _showErrorSnackBar('Please enter a valid 6-digit code');
         return;

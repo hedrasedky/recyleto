@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:recyleto_app/l10n/app_localizations.dart';
 
 import '../../providers/auth_provider.dart';
+import '../../providers/dashboard_provider.dart';
 import '../../services/api_service.dart';
 import '../../utils/app_theme.dart';
 import 'add_transaction_screen.dart';
@@ -30,6 +31,7 @@ class _SalesScreenState extends State<SalesScreen> {
   @override
   void initState() {
     super.initState();
+    print('💼 Sales: initState called - Sales Screen starting...');
     _checkAuthStatus();
     _loadTransactions();
   }
@@ -45,23 +47,43 @@ class _SalesScreenState extends State<SalesScreen> {
 
   Future<void> _loadTransactions() async {
     try {
+      print('💼 Sales: Starting to load transactions...');
       setState(() {
         _isLoading = true;
         _error = null;
       });
 
       await _apiService.initialize();
+      print('💼 Sales: API service initialized');
 
       // Load transactions from API
-      final transactions = await _apiService.getTransactions();
+      final allTransactions = await _apiService.getTransactions();
+      print('💼 Sales: Loaded ${allTransactions.length} transactions from API');
+      print('💼 Sales: Transaction details:');
+      for (int i = 0; i < allTransactions.length; i++) {
+        final tx = allTransactions[i];
+        print(
+            '💼 Sales: Transaction ${i + 1}: ${tx['_id']} - Amount: ${tx['totalAmount'] ?? tx['total'] ?? tx['amount'] ?? 0.0} - Status: ${tx['status']}');
+      }
+
+      // Show all transactions (both single and multiple items)
+      final allValidTransactions = allTransactions.where((transaction) {
+        // Show all transactions that have items
+        final items = transaction['items'] as List? ?? [];
+        return items.isNotEmpty; // Show all transactions with items
+      }).toList();
+
+      print('💼 Sales: All transactions found: ${allValidTransactions.length}');
 
       setState(() {
-        _transactions = transactions;
+        _transactions = allValidTransactions;
         _isLoading = false;
       });
 
       // Calculate sales stats
+      print('💼 Sales: Calculating sales stats...');
       _calculateSalesStats();
+      print('💼 Sales: Sales stats calculated');
 
       // Apply current filters
       _applyFilters();
@@ -89,21 +111,53 @@ class _SalesScreenState extends State<SalesScreen> {
 
   void _calculateSalesStats() {
     final today = DateTime.now();
-    final todayTransactions = _transactions.where((tx) {
+    final yesterday = today.subtract(const Duration(days: 1));
+    print(
+        '💼 Sales: Calculating stats for dates: ${today.toString()} and ${yesterday.toString()}');
+    print('💼 Sales: Total transactions to check: ${_transactions.length}');
+
+    final recentTransactions = _transactions.where((tx) {
       final txDate = DateTime.parse(tx['createdAt'] ?? tx['date'] ?? '');
-      return txDate.year == today.year &&
+      final isToday = txDate.year == today.year &&
           txDate.month == today.month &&
           txDate.day == today.day;
+      final isYesterday = txDate.year == yesterday.year &&
+          txDate.month == yesterday.month &&
+          txDate.day == yesterday.day;
+      final isRecent = isToday || isYesterday;
+      final isCompleted = tx['status'] == 'completed';
+
+      print('💼 Sales: Transaction ${tx['_id']}:');
+      print('💼 Sales:   Date: ${txDate.toString()}');
+      print('💼 Sales:   Status: ${tx['status']}');
+      print('💼 Sales:   Is Today: $isToday');
+      print('💼 Sales:   Is Yesterday: $isYesterday');
+      print('💼 Sales:   Is Recent: $isRecent');
+      print('💼 Sales:   Is Completed: $isCompleted');
+      print(
+          '💼 Sales:   Amount: ${tx['totalAmount'] ?? tx['total'] ?? tx['amount'] ?? 0.0}');
+
+      return isRecent && isCompleted;
     }).toList();
 
-    final todaySales = todayTransactions.fold<double>(
+    final recentSales = recentTransactions.fold<double>(
         0,
         (sum, tx) =>
             sum + (tx['totalAmount'] ?? tx['total'] ?? tx['amount'] ?? 0.0));
 
+    print('💼 Sales: Recent Sales calculated: $recentSales');
+    print('💼 Sales: Recent Transactions count: ${recentTransactions.length}');
+
+    // Log each transaction for debugging
+    for (int i = 0; i < recentTransactions.length; i++) {
+      final tx = recentTransactions[i];
+      final amount = tx['totalAmount'] ?? tx['total'] ?? tx['amount'] ?? 0.0;
+      print('💼 Sales Transaction ${i + 1}: \$${amount.toStringAsFixed(2)}');
+    }
+
     setState(() {
       _salesStats = {
-        'todaySales': todaySales,
+        'todaySales': recentSales,
         'totalTransactions': _transactions.length,
         'completedTransactions':
             _transactions.where((tx) => tx['status'] == 'completed').length,
@@ -111,6 +165,90 @@ class _SalesScreenState extends State<SalesScreen> {
             _transactions.where((tx) => tx['status'] == 'refunded').length,
       };
     });
+
+    // Update DashboardProvider with the calculated sales data
+    try {
+      print('💼 Sales: Attempting to update DashboardProvider...');
+      final dashboardProvider = context.read<DashboardProvider>();
+      print(
+          '💼 Sales: DashboardProvider obtained: ${dashboardProvider.runtimeType}');
+      print(
+          '💼 Sales: Current statistics before update: ${dashboardProvider.statistics}');
+
+      // Ensure DashboardProvider is initialized
+      if (dashboardProvider.statistics == null) {
+        print(
+            '💼 Sales: DashboardProvider not initialized, initializing first...');
+        dashboardProvider.updateStatistics({
+          'totalSales': 0.0,
+          'totalPurchases': 0.0,
+          'expiringCount': 0,
+          'pendingRequestsCount': 0,
+        });
+      }
+
+      dashboardProvider.updateSalesData(recentSales);
+      print(
+          '💼 Sales: Successfully updated DashboardProvider with sales data: $recentSales');
+      print(
+          '💼 Sales: Statistics after update: ${dashboardProvider.statistics}');
+    } catch (e) {
+      print('💼 Sales: Error updating DashboardProvider: $e');
+      print('💼 Sales: Error stack trace: ${StackTrace.current}');
+    }
+
+    // Also update purchases data (checkout transactions)
+    try {
+      print('🛒 Sales: Calculating customer purchases data...');
+      final customerPurchases = _transactions.where((tx) {
+        final txDate = DateTime.parse(tx['createdAt'] ?? tx['date'] ?? '');
+        final isToday = txDate.year == today.year &&
+            txDate.month == today.month &&
+            txDate.day == today.day;
+        final isYesterday = txDate.year == yesterday.year &&
+            txDate.month == yesterday.month &&
+            txDate.day == yesterday.day;
+        final isRecent = isToday || isYesterday;
+        final isCompleted = tx['status'] == 'completed';
+        final paymentCompleted = tx['payment']?['status'] == 'completed';
+
+        // Check if this is a customer purchase (you buying from suppliers)
+        final isCustomerPurchase = tx['type'] == 'purchase' ||
+            tx['transactionType'] == 'purchase' ||
+            tx['role'] == 'customer' ||
+            tx['isCustomerTransaction'] == true;
+
+        return isRecent &&
+            isCompleted &&
+            paymentCompleted &&
+            isCustomerPurchase;
+      }).toList();
+
+      final customerPurchasesTotal = customerPurchases.fold<double>(
+          0,
+          (sum, tx) =>
+              sum + (tx['totalAmount'] ?? tx['total'] ?? tx['amount'] ?? 0.0));
+
+      print('🛒 Sales: Calculated customer purchases: $customerPurchasesTotal');
+      print(
+          '🛒 Sales: Customer checkout transactions count: ${customerPurchases.length}');
+
+      // Log each customer purchase for debugging
+      for (int i = 0; i < customerPurchases.length; i++) {
+        final tx = customerPurchases[i];
+        final amount = tx['totalAmount'] ?? tx['total'] ?? tx['amount'] ?? 0.0;
+        print(
+            '🛒 Sales Customer Purchase ${i + 1}: \$${amount.toStringAsFixed(2)} - Type: ${tx['type']} - Role: ${tx['role']}');
+      }
+
+      final dashboardProvider = context.read<DashboardProvider>();
+      dashboardProvider.updatePurchasesData(customerPurchasesTotal);
+      print(
+          '🛒 Sales: Successfully updated DashboardProvider with customer purchases data: $customerPurchasesTotal');
+    } catch (e) {
+      print(
+          '🛒 Sales: Error updating DashboardProvider with customer purchases: $e');
+    }
   }
 
   @override
@@ -423,12 +561,10 @@ class _SalesScreenState extends State<SalesScreen> {
           ),
         ),
         title: Text(
-          transaction['transactionId'] ??
-              transaction['transactionReference'] ??
-              transaction['id'] ??
-              'Unknown',
+          'Invoice ${transaction['transactionId'] ?? transaction['transactionReference'] ?? transaction['id'] ?? 'Unknown'}',
           style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w600,
+                color: AppTheme.primaryTeal,
               ),
         ),
         subtitle: Column(
@@ -443,9 +579,17 @@ class _SalesScreenState extends State<SalesScreen> {
             ),
             const SizedBox(height: 2),
             Text(
-              '${AppLocalizations.of(context)!.customer}: ${transaction['customerInfo']?['name'] ?? transaction['customerName'] ?? AppLocalizations.of(context)!.anonymous} • ${transaction['items']?.length ?? 0} ${AppLocalizations.of(context)!.items}',
+              'Complete Invoice • ${transaction['items']?.length ?? 0} Medicines',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: AppTheme.darkGray.withOpacity(0.6),
+                  ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Pharmacy: ${transaction['pharmacyId']?.substring(0, 8).toUpperCase() ?? 'ABC'}',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppTheme.primaryTeal.withOpacity(0.7),
+                    fontWeight: FontWeight.w500,
                   ),
             ),
           ],

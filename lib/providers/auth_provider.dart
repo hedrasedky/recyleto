@@ -69,13 +69,29 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> _loadUserProfile() async {
     try {
+      print(
+          '👤 _loadUserProfile: Attempting to load user profile with token...');
+      if (_apiService.authToken != null) {
+        print(
+            '👤 _loadUserProfile: ApiService has token: ${_apiService.authToken!.substring(0, 20)}...');
+      } else {
+        print('👤 _loadUserProfile: ApiService does NOT have a token.');
+      }
       final response = await _apiService.getUserProfile();
       _userProfile = response['data']?['profile'] ?? response;
       _updateUserFromProfile(_userProfile!);
       notifyListeners();
     } catch (e) {
-      // Handle profile loading error
-      rethrow;
+      print('❌ _loadUserProfile error: ${e.toString()}');
+
+      // Check if it's a 401 error (token expired)
+      if (e.toString().contains('401') ||
+          e.toString().contains('Session expired')) {
+        print('🔍 Token expired, logging out user');
+        await logout();
+      }
+      // Handle other profile loading errors silently
+      // Don't rethrow to avoid breaking login flow
     }
   }
 
@@ -93,23 +109,36 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> login(String email, String password) async {
     try {
+      print('🔐 AuthProvider.login() called');
+      print('🔐 Email: $email');
+
       final response = await _apiService.login(email, password);
 
       // Check if login was successful from API response
       if (response['success'] == true &&
           (response['data']?['token'] != null || response['token'] != null)) {
+        print('✅ Login successful');
         _isAuthenticated = true;
         _userEmail = email;
 
+        // Reinitialize API service with new token
+        print('🔄 Reinitializing API service...');
+        await _apiService.initialize();
+
         // Load user profile to get complete user data
+        print('👤 Loading user profile...');
         await _loadUserProfile();
 
+        print('💾 Saving auth state...');
         await _saveAuthState();
         notifyListeners();
+        print('✅ Login completed successfully');
       } else {
+        print('❌ Login failed: Invalid response from server');
         throw Exception('Login failed: Invalid response from server');
       }
     } catch (e) {
+      print('❌ Login error: ${e.toString()}');
       throw Exception('Login failed: ${e.toString()}');
     }
   }
@@ -158,16 +187,22 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> registerPharmacy(Map<String, dynamic> pharmacyData) async {
     try {
+      print('🔍 AuthProvider: Starting pharmacy registration');
       final response = await _apiService.registerPharmacy(pharmacyData);
+      print('🔍 AuthProvider: Registration response: $response');
 
       if (response['success'] == true) {
         // Pharmacy registration successful
+        print('✅ AuthProvider: Registration successful');
         notifyListeners();
       } else {
+        print('❌ AuthProvider: Registration failed - Invalid response');
         throw Exception(
             'Pharmacy registration failed: Invalid response from server');
       }
     } catch (e) {
+      print('❌ AuthProvider: Registration error: $e');
+      // Re-throw with more context but don't clear form data
       throw Exception('Pharmacy registration failed: ${e.toString()}');
     }
   }
@@ -175,21 +210,75 @@ class AuthProvider extends ChangeNotifier {
   // ===== Password reset flow =====
   Future<void> requestPasswordReset(String email) async {
     try {
+      print(
+          '🔍 AuthProvider: Request password reset called with email: $email');
       await _apiService.requestPasswordReset(email);
       _pendingResetEmail = email;
+      print('🔍 AuthProvider: _pendingResetEmail set to: $_pendingResetEmail');
       notifyListeners();
+      print(
+          '✅ AuthProvider: Request password reset successful and listeners notified');
     } catch (e) {
+      print('❌ AuthProvider: Request password reset failed: ${e.toString()}');
       throw Exception('Forgot password failed: ${e.toString()}');
     }
   }
 
   Future<void> verifyResetCode(String email, String code) async {
     try {
-      await _apiService.verifyOtp(email, code);
-      _pendingResetEmail = email;
+      print(
+          '🔍 AuthProvider: verifyResetCode called with email: "$email" and code: "$code"');
+      print('🔍 AuthProvider: _pendingResetEmail is: "$_pendingResetEmail"');
+
+      // Use the email from parameter or fallback to pendingResetEmail
+      final emailToUse = email.isNotEmpty ? email : _pendingResetEmail;
+      print('🔍 AuthProvider: Using email: "$emailToUse"');
+
+      if (emailToUse == null || emailToUse.isEmpty) {
+        print('❌ AuthProvider: No email available for OTP verification');
+        throw Exception('No email available for OTP verification');
+      }
+
+      print(
+          '🔍 AuthProvider: Attempting to verify OTP for email: $emailToUse with code: $code');
+      final response = await _apiService.verifyOtp(emailToUse, code);
+      print(
+          '🔍 AuthProvider: Received response from verifyOtp: ${response.toString()}');
+
+      // Extract token from response
+      final token = response['data']?['token'] ?? response['token'];
+      print(
+          '🔍 AuthProvider: Extracted token: ${token != null ? 'FOUND' : 'NULL'}');
+
+      if (token != null) {
+        print('🔍 AuthProvider: Token found in response. Saving token...');
+        await _apiService.saveToken(token);
+        print('✅ Token saved after OTP verification');
+
+        // Update auth state
+        _isAuthenticated = true;
+        _userEmail = emailToUse;
+        await _saveAuthState();
+        print('✅ Auth state saved');
+
+        // Load user profile
+        await _loadUserProfile();
+        print('✅ User profile loaded');
+      } else {
+        print('❌ AuthProvider: No token received after OTP verification');
+        print('❌ AuthProvider: Full response: $response');
+        throw Exception(
+            'No authentication token received after OTP verification');
+      }
+
+      _pendingResetEmail = emailToUse;
       _resetTokenOrCode = code;
       notifyListeners();
+      print(
+          '✅ AuthProvider: OTP verification successful and listeners notified.');
     } catch (e) {
+      print(
+          '❌ AuthProvider: OTP verification failed in AuthProvider: ${e.toString()}');
       throw Exception('OTP verification failed: ${e.toString()}');
     }
   }

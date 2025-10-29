@@ -25,6 +25,22 @@ class _ExpiringMedicinesScreenState extends State<ExpiringMedicinesScreen> {
   Future<void> _loadExpiringMedicines() async {
     try {
       final medicines = await _apiService.getExpiringMedicines();
+
+      // Debug: Print medicine data to see what we're getting
+      print('🔍 Expiring Medicines Data:');
+      for (int i = 0; i < medicines.length; i++) {
+        final medicine = medicines[i];
+        print('🔍 Medicine $i:');
+        print('  - Name: ${medicine['name']}');
+        print('  - Manufacturer: ${medicine['manufacturer']}');
+        print('  - Category: ${medicine['category']}');
+        print('  - Transaction Number: ${medicine['transactionNumber']}');
+        print('  - Last Transaction Date: ${medicine['lastTransactionDate']}');
+        print('  - Created At: ${medicine['createdAt']}');
+        print('  - Full data: $medicine');
+        print('---');
+      }
+
       setState(() {
         _expiringMedicines = medicines;
         _isLoading = false;
@@ -331,8 +347,11 @@ class _ExpiringMedicinesScreenState extends State<ExpiringMedicinesScreen> {
                 Expanded(
                   child: _buildDetailItem(
                     AppLocalizations.of(context)!.purchaseDate,
-                    medicine['purchaseDate'] ??
-                        AppLocalizations.of(context)!.unknown,
+                    medicine['lastTransactionDate'] != null
+                        ? '${DateTime.parse(medicine['lastTransactionDate']).day}/${DateTime.parse(medicine['lastTransactionDate']).month}/${DateTime.parse(medicine['lastTransactionDate']).year}'
+                        : medicine['createdAt'] != null
+                            ? '${DateTime.parse(medicine['createdAt']).day}/${DateTime.parse(medicine['createdAt']).month}/${DateTime.parse(medicine['createdAt']).year}'
+                            : AppLocalizations.of(context)!.unknown,
                     Icons.shopping_cart,
                     AppTheme.successGreen,
                   ),

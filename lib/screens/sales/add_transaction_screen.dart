@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:recyleto_app/l10n/app_localizations.dart';
@@ -36,15 +37,73 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
   Future<void> _loadMedicines() async {
     try {
+      print('💊 Add Transaction: Starting to load medicines...');
       await _apiService.initialize();
 
       // Load medicines from API
       final medicines = await _apiService.getMedicines();
 
+      print(
+          '💊 Add Transaction: Loaded ${medicines.length} medicines from API');
+      print('💊 Add Transaction: Raw medicines data: $medicines');
+
+      // Validate medicines data
+      final validMedicines = medicines.where((medicine) {
+        // Check for both 'id' and '_id' (Backend uses '_id')
+        final hasId = medicine['id'] != null || medicine['_id'] != null;
+        final isValid = hasId &&
+            medicine['name'] != null &&
+            medicine['price'] != null &&
+            medicine['price'] > 0;
+
+        if (!isValid) {
+          print('⚠️ Add Transaction: Invalid medicine data: $medicine');
+          print(
+              '⚠️ Add Transaction: hasId: $hasId, name: ${medicine['name']}, price: ${medicine['price']}');
+        }
+
+        return isValid;
+      }).toList();
+
+      print('💊 Add Transaction: Valid medicines: ${validMedicines.length}');
+      print('💊 Add Transaction: Valid medicines data: $validMedicines');
+
+      // Debug: Check medicine IDs
+      for (final medicine in validMedicines) {
+        final id = medicine['id'] ?? medicine['_id'];
+        print(
+            '💊 Medicine: ${medicine['name']} - ID: $id (length: ${id?.toString().length})');
+        print('💊 Full medicine data: $medicine');
+      }
+
+      // Check if the problematic medicine ID exists
+      final problematicId = '68e0fcc4b5baaa298c162b46';
+      final foundMedicine = validMedicines.firstWhere(
+        (m) => (m['id'] ?? m['_id']) == problematicId,
+        orElse: () => {},
+      );
+
+      if (foundMedicine.isEmpty) {
+        print(
+            '❌ Problematic medicine ID $problematicId not found in valid medicines');
+        print(
+            '❌ Available IDs: ${validMedicines.map((m) => m['id'] ?? m['_id']).toList()}');
+      } else {
+        print(
+            '✅ Problematic medicine ID $problematicId found: ${foundMedicine['name']}');
+      }
+
       setState(() {
-        _availableMedicines = medicines;
+        _availableMedicines = validMedicines;
       });
+
+      // Check for low stock medicines and show notifications
+      await _checkLowStockMedicines(validMedicines);
+
+      print(
+          '💊 Add Transaction: _availableMedicines updated: ${_availableMedicines.length}');
     } catch (e) {
+      print('❌ Add Transaction: Failed to load medicines: ${e.toString()}');
       // Show error to user
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -88,21 +147,224 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     super.dispose();
   }
 
+  // Check for low stock medicines when loading
+  Future<void> _checkLowStockMedicines(
+      List<Map<String, dynamic>> medicines) async {
+    try {
+      final lowStockMedicines = medicines.where((medicine) {
+        final stock = medicine['stock'] ?? medicine['quantity'] ?? 0;
+        return stock < 10;
+      }).toList();
+
+      if (lowStockMedicines.isNotEmpty) {
+        print('⚠️ Found ${lowStockMedicines.length} low stock medicines');
+
+        // Show notification for each low stock medicine
+        for (final medicine in lowStockMedicines) {
+          await _checkLowStockNotification(medicine);
+        }
+      }
+    } catch (e) {
+      print('❌ Error checking low stock medicines: $e');
+    }
+  }
+
+  Future<void> _checkLowStockNotification(Map<String, dynamic> medicine) async {
+    try {
+      final stock = medicine['stock'] ?? medicine['quantity'] ?? 0;
+      final lowStockThreshold = 10; // Set your low stock threshold
+
+      if (stock <= lowStockThreshold) {
+        print('⚠️ Low stock detected for ${medicine['name']}: $stock');
+
+        // Create notification data
+        final notificationData = {
+          'type': 'low_stock',
+          'title': 'Low Stock Alert',
+          'message':
+              '${medicine['name']} is running low on stock (${stock} remaining)',
+          'medicineId': medicine['id'] ?? medicine['_id'],
+          'medicineName': medicine['name'],
+          'currentStock': stock,
+          'threshold': lowStockThreshold,
+          'priority': 'high',
+          'timestamp': DateTime.now().toIso8601String(),
+        };
+
+        // Send notification to backend
+        await _apiService.createNotification(notificationData);
+
+        // Show local notification immediately
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  '⚠️ Low Stock: ${medicine['name']} (${stock} remaining)'),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 5),
+              action: SnackBarAction(
+                label: 'View',
+                textColor: Colors.white,
+                onPressed: () {
+                  // Navigate to inventory or show details
+                  print('Navigate to inventory for ${medicine['name']}');
+                },
+              ),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('Error checking low stock notification: $e');
+    }
+  }
+
+  Future<void> _checkExpiringNotification(Map<String, dynamic> medicine) async {
+    try {
+      final expiryDate = medicine['expiryDate'];
+      if (expiryDate != null) {
+        final expiry = DateTime.parse(expiryDate);
+        final now = DateTime.now();
+        final daysUntilExpiry = expiry.difference(now).inDays;
+
+        if (daysUntilExpiry <= 30 && daysUntilExpiry >= 0) {
+          print(
+              '⚠️ Expiring soon: ${medicine['name']} in $daysUntilExpiry days');
+
+          // Create notification data
+          final notificationData = {
+            'type': 'expiring',
+            'title': 'Expiry Alert',
+            'message':
+                '${medicine['name']} is expiring in $daysUntilExpiry days',
+            'medicineId': medicine['id'] ?? medicine['_id'],
+            'medicineName': medicine['name'],
+            'expiryDate': expiryDate,
+            'daysUntilExpiry': daysUntilExpiry,
+            'priority': daysUntilExpiry <= 7 ? 'critical' : 'medium',
+            'timestamp': DateTime.now().toIso8601String(),
+          };
+
+          // Send notification to backend
+          await _apiService.createNotification(notificationData);
+
+          // Show local notification
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    '⚠️ Expiring Soon: ${medicine['name']} in $daysUntilExpiry days'),
+                backgroundColor:
+                    daysUntilExpiry <= 7 ? Colors.red : Colors.orange,
+                duration: const Duration(seconds: 5),
+                action: SnackBarAction(
+                  label: 'View',
+                  textColor: Colors.white,
+                  onPressed: () {
+                    // Navigate to expiring medicines screen
+                    print(
+                        'Navigate to expiring medicines for ${medicine['name']}');
+                  },
+                ),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      print('Error checking expiring notification: $e');
+    }
+  }
+
   void _addMedicineToTransaction(Map<String, dynamic> medicine) {
     showDialog(
       context: context,
       builder: (context) => _MedicineSelectionDialog(
         medicine: medicine,
-        onAdd: (quantity, price, expiryDate) {
+        onAdd: (quantity, price, expiryDate) async {
+          // Validate input data
+          if (quantity <= 0) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Quantity must be greater than 0'),
+                backgroundColor: Colors.red,
+              ),
+            );
+            return;
+          }
+
+          if (price <= 0) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Price must be greater than 0'),
+                backgroundColor: Colors.red,
+              ),
+            );
+            return;
+          }
+
+          // Check for both 'id' and '_id' (Backend uses '_id')
+          final medicineId = medicine['id'] ?? medicine['_id'];
+          print('💊 Adding medicine to transaction:');
+          print('💊 Medicine name: ${medicine['name']}');
+          print('💊 Medicine ID: $medicineId');
+          print('💊 Medicine data: $medicine');
+
+          // Check for low stock notification
+          await _checkLowStockNotification(medicine);
+
+          // Check for expiring notification
+          await _checkExpiringNotification(medicine);
+
+          if (medicineId == null) {
+            print('❌ Medicine ID is null for medicine: ${medicine['name']}');
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    'Medicine ID is missing. Please refresh your inventory.'),
+                backgroundColor: Colors.red,
+                action: SnackBarAction(
+                  label: 'Refresh',
+                  textColor: Colors.white,
+                  onPressed: () {
+                    _loadMedicines();
+                  },
+                ),
+              ),
+            );
+            return;
+          }
+
+          // Validate medicine ID format (should be 24 character hex string)
+          if (medicineId.toString().length != 24) {
+            print(
+                '❌ Invalid medicine ID format: $medicineId (length: ${medicineId.toString().length})');
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    'Invalid medicine ID format. Please refresh your inventory.'),
+                backgroundColor: Colors.red,
+                action: SnackBarAction(
+                  label: 'Refresh',
+                  textColor: Colors.white,
+                  onPressed: () {
+                    _loadMedicines();
+                  },
+                ),
+              ),
+            );
+            return;
+          }
+
           setState(() {
             final existingIndex = _transactionItems
-                .indexWhere((item) => item['medicineId'] == medicine['id']);
+                .indexWhere((item) => item['medicineId'] == medicineId);
 
             if (existingIndex != -1) {
               _transactionItems[existingIndex]['quantity'] += quantity;
             } else {
-              _transactionItems.add({
-                'medicineId': medicine['id'],
+              final newItem = {
+                'medicineId': medicineId,
                 'name': medicine['name'],
                 'genericName': medicine['genericName'],
                 'form': medicine['form'],
@@ -113,7 +375,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 'price': price,
                 'expiryDate': expiryDate,
                 'lineTotal': price * quantity,
-              });
+              };
+
+              print('💊 Adding new item to transaction: $newItem');
+              _transactionItems.add(newItem);
             }
           });
 
@@ -168,27 +433,133 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
       final transactionRef = _generateTransactionReference();
 
-      // Prepare transaction data for API
+      // Prepare transaction data directly (skip cart system for now)
+      // Map transaction type to backend expected values
+      String backendTransactionType = 'sale'; // Default
+      if (_selectedTransactionType != null) {
+        switch (_selectedTransactionType!.toLowerCase()) {
+          case 'full receipt':
+            backendTransactionType = 'sale';
+            break;
+          case 'per medicine':
+            backendTransactionType = 'sale';
+            break;
+          default:
+            backendTransactionType = 'sale';
+        }
+      }
+
       final transactionData = {
-        'transactionType': _selectedTransactionType?.toLowerCase() ?? 'sale',
+        'transactionType': backendTransactionType,
         'description': _descriptionController.text.trim(),
-        'items': _transactionItems
-            .map((item) => {
-                  'medicineId': item['medicineId'],
-                  'quantity': item['quantity'],
-                  'unitPrice': item['price'],
-                })
-            .toList(),
         'customerName': 'Walk-in Customer', // Default customer
-        'customerPhone': '', // Optional
+        'customerPhone':
+            '+1234567890123', // Default phone for backend compatibility
         'paymentMethod': 'cash', // Default for now
         'tax': _tax,
-        'discount': 0.0,
-        'status': 'completed',
+        'discount': 0,
+        'status': 'completed', // Add status field
+        'source': 'add_transaction', // Mark as created from Add New Transaction
+        'invoiceType': _selectedTransactionType ==
+                AppLocalizations.of(context)!.fullReceipt
+            ? 'full_receipt'
+            : 'per_medicine', // Store the selected type (full_receipt or per_medicine)
+        'items': _transactionItems.map((item) {
+          // Validate each item
+          final medicineId = item['medicineId'];
+          final quantity = item['quantity'];
+          final price = item['price'];
+
+          print(
+              '💊 Item validation: ${item['name']} - ID: $medicineId, Qty: $quantity, Price: $price');
+          print('💊 Full item data: $item');
+
+          if (medicineId == null || medicineId.toString().isEmpty) {
+            print('❌ Medicine ID is null or empty for item: ${item['name']}');
+            throw Exception('Medicine ID is null for item: ${item['name']}');
+          }
+
+          if (quantity == null || quantity <= 0) {
+            print('❌ Invalid quantity for item: ${item['name']}');
+            throw Exception('Invalid quantity for item: ${item['name']}');
+          }
+
+          if (price == null || price <= 0) {
+            print('❌ Invalid price for item: ${item['name']}');
+            throw Exception('Invalid price for item: ${item['name']}');
+          }
+
+          final itemData = {
+            'medicineId': medicineId,
+            'quantity': quantity,
+            'unitPrice': price,
+            'totalPrice': price * quantity,
+          };
+
+          print('💊 Final item data for API: $itemData');
+          return itemData;
+        }).toList(),
       };
 
-      // Send transaction to API
-      final response = await _apiService.processCheckout(transactionData);
+      print(
+          '💳 Processing transaction directly: ${json.encode(transactionData)}');
+      print('💳 Transaction type: ${transactionData['transactionType']}');
+      print(
+          '💳 Transaction items count: ${(transactionData['items'] as List).length}');
+      print('💳 Transaction items: ${transactionData['items']}');
+      print('💳 Selected transaction type: $_selectedTransactionType');
+      print('💳 Backend transaction type: $backendTransactionType');
+
+      // Validate medicine IDs before sending to API
+      print('💊 Validating medicine IDs before API call...');
+      final items = transactionData['items'] as List;
+      for (final item in items) {
+        final medicineId = item['medicineId'];
+        print('💊 Checking medicine ID: $medicineId');
+
+        try {
+          final medicine = await _apiService.getMedicineById(medicineId);
+          print(
+              '💊 Medicine found: ${medicine['name']} - Stock: ${medicine['quantity']}');
+
+          if (medicine['quantity'] < item['quantity']) {
+            throw Exception(
+                'Insufficient stock for ${medicine['name']}. Available: ${medicine['quantity']}, Requested: ${item['quantity']}');
+          }
+        } catch (e) {
+          print('❌ Medicine validation failed: $e');
+          print('❌ Medicine ID: $medicineId');
+          print(
+              '❌ Available medicines: ${_availableMedicines.map((m) => m['id'] ?? m['_id']).toList()}');
+
+          // Show specific error message
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    'Medicine not found: $medicineId. Please refresh your inventory.'),
+                backgroundColor: AppTheme.errorRed,
+                duration: const Duration(seconds: 5),
+                action: SnackBarAction(
+                  label: 'Refresh',
+                  textColor: Colors.white,
+                  onPressed: () {
+                    _loadMedicines();
+                  },
+                ),
+              ),
+            );
+          }
+          return; // Exit early to prevent API call
+        }
+      }
+
+      // Send transaction directly to API (bypass cart system)
+      print('💳 About to call createTransaction API...');
+      final response = await _apiService.createTransaction(transactionData);
+      print('💳 createTransaction API call completed!');
+      print('💳 Response: $response');
+
       final transactionId =
           response['data']?['transactionId'] ?? transactionRef;
 
@@ -243,11 +614,39 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         );
       }
     } catch (e) {
+      print('❌ Transaction failed with error: $e');
+      print('❌ Error type: ${e.runtimeType}');
+
+      String errorMessage = 'Transaction failed: ${e.toString()}';
+
+      // Parse specific error messages
+      if (e.toString().contains('Medicine validation failed')) {
+        errorMessage =
+            'Medicine not found or insufficient stock. Please check your inventory.';
+      } else if (e.toString().contains('Status: 400')) {
+        errorMessage =
+            'Invalid request data. Please check your medicine selection.';
+      } else if (e.toString().contains('Status: 404')) {
+        errorMessage =
+            'Medicine not found in database. Please refresh your inventory.';
+      } else if (e.toString().contains('Status: 500')) {
+        errorMessage =
+            'Server error occurred. Please try again or contact support.';
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Transaction failed: ${e.toString()}'),
+            content: Text(errorMessage),
             backgroundColor: AppTheme.errorRed,
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () {
+                _processTransaction();
+              },
+            ),
           ),
         );
       }
@@ -288,8 +687,13 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         elevation: 0,
         actions: [
           IconButton(
-            onPressed: _resetTransaction,
+            onPressed: _loadMedicines,
             icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh Medicines',
+          ),
+          IconButton(
+            onPressed: _resetTransaction,
+            icon: const Icon(Icons.clear),
             tooltip: AppLocalizations.of(context)!.resetTransaction,
           ),
         ],
@@ -488,7 +892,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
   Widget _buildMedicineListItem(Map<String, dynamic> medicine) {
-    final bool isLowStock = medicine['stock'] < 10;
+    final bool isLowStock = (medicine['stock'] ?? 0) < 10;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -505,20 +909,21 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(
-            _getFormIcon(medicine['form']),
+            _getFormIcon(medicine['form'] ?? 'tablet'),
             color: AppTheme.primaryTeal,
           ),
         ),
         title: Text(
-          medicine['name'],
+          medicine['name'] ?? 'Unknown',
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('${medicine['genericName']} • ${medicine['manufacturer']}'),
             Text(
-                '${AppLocalizations.of(context)!.stock}: ${medicine['stock']} • \$${medicine['price'].toStringAsFixed(2)}'),
+                '${medicine['genericName'] ?? 'Unknown'} • ${medicine['manufacturer'] ?? 'Unknown'}'),
+            Text(
+                '${AppLocalizations.of(context)!.stock}: ${medicine['stock'] ?? 0} • \$${(medicine['price'] ?? 0).toStringAsFixed(2)}'),
             if (isLowStock)
               Text(
                 AppLocalizations.of(context)!.lowStock,
@@ -530,7 +935,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           ],
         ),
         trailing: ElevatedButton(
-          onPressed: medicine['stock'] > 0
+          onPressed: (medicine['stock'] ?? 0) > 0
               ? () => _addMedicineToTransaction(medicine)
               : null,
           style: ElevatedButton.styleFrom(
@@ -538,7 +943,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             foregroundColor: Colors.white,
             minimumSize: const Size(60, 36),
           ),
-          child: Text(medicine['stock'] > 0
+          child: Text((medicine['stock'] ?? 0) > 0
               ? AppLocalizations.of(context)!.add
               : AppLocalizations.of(context)!.out),
         ),
@@ -602,13 +1007,16 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  item['name'],
+                  item['name'] ?? 'Unknown',
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
-                Text('${item['genericName']} • ${item['form']}'),
-                Text('${item['manufacturer']} • ${item['packSize']}'),
                 Text(
-                    '${AppLocalizations.of(context)!.batch}: ${item['batchNumber']} • ${AppLocalizations.of(context)!.exp}: ${item['expiryDate'].substring(0, 10)}'),
+                    '${item['genericName'] ?? 'Unknown'} • ${item['form'] ?? 'Unknown'}'),
+                Text(
+                    '${item['manufacturer'] ?? 'Unknown'} • ${item['packSize'] ?? 'Unknown'}'),
+                Text(
+                    '${AppLocalizations.of(context)!.batch}: ${item['batchNumber'] ?? 'Unknown'} • ${AppLocalizations.of(context)!.exp}: ${item['expiryDate']?.toString().substring(0, 10) ?? 'Unknown'}'),
+                Text('ID: ${item['medicineId'] ?? 'Unknown'}'),
               ],
             ),
           ),

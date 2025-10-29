@@ -179,7 +179,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
         ),
       ),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: Form(
             key: _formKey,
@@ -323,7 +323,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                   ),
                 ),
 
-                const Spacer(),
+                const SizedBox(height: 32),
 
                 // Reset Password Button
                 CustomButton(
@@ -354,6 +354,8 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                     ),
                   ),
                 ),
+
+                const SizedBox(height: 24),
               ],
             ),
           ),

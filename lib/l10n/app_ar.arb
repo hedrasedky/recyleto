@@ -942,7 +942,7 @@
   "invoiceDate": "تاريخ الفاتورة",
   "finalAmount": "المبلغ النهائي",
   "medicinesInInvoice": "الأدوية في الفاتورة",
-  "addCompleteInvoice": "إضافة الفاتورة كاملة",
+  "addCompleteInvoice": "إضافة الفاتورة",
   "selectPartial": "اختيار جزئي",
   "selectMedicines": "اختيار الأدوية",
   "addSelected": "إضافة المحدد",
@@ -972,5 +972,6 @@
   "mustBuyComplete": "يجب الشراء كاملاً",
   "canSelectPartial": "يمكن الاختيار الجزئي",
   "addCompleteInvoice": "إضافة فاتورة كاملة",
-  "selectPartialInvoice": "اختيار فاتورة جزئية"
+  "selectPartialInvoice": "اختيار فاتورة جزئية",
+  "selectMedicines": "اختيار الأدوية"
 }

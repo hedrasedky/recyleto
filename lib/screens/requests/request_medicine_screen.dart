@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -27,6 +29,7 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
   String _selectedForm = 'Tablet';
   String _selectedUrgency = 'medium';
   File? _selectedImage;
+  Uint8List? _imageBytes; // for web
   bool _isSubmitting = false;
 
   final ImagePicker _picker = ImagePicker();
@@ -102,9 +105,18 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
                   imageQuality: 80,
                 );
                 if (photo != null) {
-                  setState(() {
-                    _selectedImage = File(photo.path);
-                  });
+                  if (kIsWeb) {
+                    final bytes = await photo.readAsBytes();
+                    setState(() {
+                      _imageBytes = bytes;
+                      _selectedImage = null;
+                    });
+                  } else {
+                    setState(() {
+                      _selectedImage = File(photo.path);
+                      _imageBytes = null;
+                    });
+                  }
                 }
               },
             ),
@@ -121,9 +133,18 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
                   imageQuality: 80,
                 );
                 if (photo != null) {
-                  setState(() {
-                    _selectedImage = File(photo.path);
-                  });
+                  if (kIsWeb) {
+                    final bytes = await photo.readAsBytes();
+                    setState(() {
+                      _imageBytes = bytes;
+                      _selectedImage = null;
+                    });
+                  } else {
+                    setState(() {
+                      _selectedImage = File(photo.path);
+                      _imageBytes = null;
+                    });
+                  }
                 }
               },
             ),
@@ -135,6 +156,7 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
                   Navigator.pop(context);
                   setState(() {
                     _selectedImage = null;
+                    _imageBytes = null;
                   });
                 },
               ),
@@ -324,7 +346,7 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
                 ),
           ),
           const SizedBox(height: 16),
-          if (_selectedImage != null)
+          if ((_selectedImage != null) || (kIsWeb && _imageBytes != null))
             Container(
               width: double.infinity,
               height: 200,
@@ -334,10 +356,19 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: Image.file(
-                  _selectedImage!,
-                  fit: BoxFit.cover,
-                ),
+                child: kIsWeb
+                    ? (_imageBytes != null
+                        ? Image.memory(
+                            _imageBytes!,
+                            fit: BoxFit.cover,
+                          )
+                        : const Center(
+                            child: Icon(Icons.image_not_supported, size: 32),
+                          ))
+                    : Image.file(
+                        _selectedImage!,
+                        fit: BoxFit.cover,
+                      ),
               ),
             )
           else
@@ -377,10 +408,13 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
                 child: OutlinedButton.icon(
                   onPressed: _pickImage,
                   icon: Icon(
-                    _selectedImage != null ? Icons.edit : Icons.camera_alt,
+                    (_selectedImage != null || (kIsWeb && _imageBytes != null))
+                        ? Icons.edit
+                        : Icons.camera_alt,
                     size: 20,
                   ),
-                  label: Text(_selectedImage != null
+                  label: Text((_selectedImage != null ||
+                          (kIsWeb && _imageBytes != null))
                       ? AppLocalizations.of(context)!.changeImage
                       : AppLocalizations.of(context)!.addImage),
                   style: OutlinedButton.styleFrom(
@@ -390,12 +424,14 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
                   ),
                 ),
               ),
-              if (_selectedImage != null) ...[
+              if ((_selectedImage != null) ||
+                  (kIsWeb && _imageBytes != null)) ...[
                 const SizedBox(width: 16),
                 OutlinedButton.icon(
                   onPressed: () {
                     setState(() {
                       _selectedImage = null;
+                      _imageBytes = null;
                     });
                   },
                   icon: const Icon(Icons.delete, size: 20),
@@ -571,7 +607,7 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
       final pharmacyId = authProvider.userProfile?['id'] ?? 'unknown_pharmacy';
 
       // Prepare request data for API
-      final requestData = {
+      final requestData = <String, dynamic>{
         'medicineName': _medicineNameController.text.trim(),
         'genericName': _genericNameController.text.trim(),
         'form': _selectedForm,
@@ -579,10 +615,29 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
         'urgency': _selectedUrgency.toLowerCase(),
         'notes': _notesController.text.trim(),
         'status': 'pending',
-        'imageUrl': _selectedImage?.path, // Send file path directly
         'requestedAt': DateTime.now().toIso8601String(),
         'pharmacyId': pharmacyId,
       };
+
+      // Attach image conditionally (only if available and not causing issues)
+      try {
+        if (kIsWeb) {
+          if (_imageBytes != null) {
+            requestData['imageBytes'] = _imageBytes!;
+            print('📸 Attaching image bytes for web');
+          }
+        } else {
+          if (_selectedImage != null) {
+            requestData['imageUrl'] = _selectedImage!.path;
+            print(
+                '📸 Attaching image file for mobile: ${_selectedImage!.path}');
+          }
+        }
+      } catch (imageError) {
+        print(
+            '⚠️ Image attachment failed, proceeding without image: $imageError');
+        // Continue without image if there's an issue
+      }
 
       // Call API to create medicine request
       await _apiService.createMedicineRequest(requestData);
@@ -613,8 +668,32 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
         Navigator.of(context).pop();
       }
     } catch (e) {
+      print('❌ Request failed with error: $e');
+      print('❌ Error type: ${e.runtimeType}');
+
+      String errorMessage = 'Failed to submit request: ${e.toString()}';
+
+      // Parse specific error messages
+      if (e.toString().contains('permission denied')) {
+        errorMessage =
+            'Permission denied: Unable to upload image. Please try without image.';
+      } else if (e.toString().contains('EACCES')) {
+        errorMessage =
+            'Access denied: Unable to save file. Please try without image.';
+      } else if (e.toString().contains('Permission denied')) {
+        errorMessage =
+            'Server permission error: Unable to save image. Please try without image.';
+      } else if (e.toString().contains('Unable to write to upload directory')) {
+        errorMessage =
+            'Server storage error: Unable to save image. Please try without image.';
+      } else if (e.toString().contains('Status: 400')) {
+        errorMessage = 'Invalid request data. Please check your information.';
+      } else if (e.toString().contains('Status: 500')) {
+        errorMessage =
+            'Server error occurred. Please try again or contact support.';
+      }
+
       if (mounted) {
-        // Show error message
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
@@ -623,18 +702,25 @@ class _RequestMedicineScreenState extends State<RequestMedicineScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Failed to submit request: ${e.toString()}',
+                    errorMessage,
                     style: const TextStyle(color: Colors.white),
                   ),
                 ),
               ],
             ),
             backgroundColor: AppTheme.errorRed,
-            duration: const Duration(seconds: 5),
+            duration: const Duration(seconds: 8),
             action: SnackBarAction(
-              label: 'Retry',
+              label: 'Retry Without Image',
               textColor: Colors.white,
-              onPressed: _submitRequest,
+              onPressed: () {
+                // Clear image and retry
+                setState(() {
+                  _selectedImage = null;
+                  _imageBytes = null;
+                });
+                _submitRequest();
+              },
             ),
           ),
         );

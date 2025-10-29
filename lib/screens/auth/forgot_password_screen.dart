@@ -85,7 +85,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
         // Small delay before navigating to next screen
         Future.delayed(const Duration(seconds: 2), () {
           if (mounted) {
-            Navigator.of(context).pushNamed('/otp');
+            Navigator.of(context).pushNamed('/otp', arguments: {
+              'email': _emailController.text.trim(),
+              'purpose': 'reset',
+            });
           }
         });
       }

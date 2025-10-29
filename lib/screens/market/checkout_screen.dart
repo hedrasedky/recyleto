@@ -59,6 +59,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       // Use API to get cart items
       final items = await _apiService.getCartItems();
 
+      print('🔍 Checkout: Loaded ${items.length} items from API');
+      for (int i = 0; i < items.length; i++) {
+        final item = items[i];
+        print('🔍 Checkout: Item $i: ${item.keys.toList()}');
+        print('🔍 Checkout: Item $i totalAmount: ${item['totalAmount']}');
+        print('🔍 Checkout: Item $i finalAmount: ${item['finalAmount']}');
+        print('🔍 Checkout: Item $i price: ${item['price']}');
+      }
+
       setState(() {
         _cartItems = items;
         _isLoading = false;
@@ -214,15 +223,56 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  double get _subtotal => _cartItems.fold(0,
-      (sum, item) => sum + ((item['price'] ?? 0.0) * (item['quantity'] ?? 1)));
-  double get _itemDiscountAmount => _cartItems.fold(
-      0,
-      (sum, item) =>
-          sum +
-          (((item['originalPrice'] ?? item['price'] ?? 0.0) -
-                  (item['price'] ?? 0.0)) *
-              (item['quantity'] ?? 1)));
+  double get _subtotal {
+    print('🔍 Checkout: Calculating subtotal for ${_cartItems.length} items');
+    double total = 0.0;
+
+    for (int i = 0; i < _cartItems.length; i++) {
+      final item = _cartItems[i];
+      double itemAmount = 0.0;
+
+      print('🔍 Checkout: Item $i keys: ${item.keys.toList()}');
+      print(
+          '🔍 Checkout: Item $i unitPrice: ${item['unitPrice']}, totalPrice: ${item['totalPrice']}, quantity: ${item['quantity']}');
+
+      // Try direct amount fields first
+      if (item['totalAmount'] != null) {
+        itemAmount = (item['totalAmount'] as num).toDouble();
+        print('🔍 Checkout: Item $i using totalAmount: $itemAmount');
+      } else if (item['finalAmount'] != null) {
+        itemAmount = (item['finalAmount'] as num).toDouble();
+        print('🔍 Checkout: Item $i using finalAmount: $itemAmount');
+      } else if (item['totalPrice'] != null) {
+        itemAmount = (item['totalPrice'] as num).toDouble();
+        print('🔍 Checkout: Item $i using totalPrice: $itemAmount');
+      } else if (item['price'] != null) {
+        itemAmount = (item['price'] as num).toDouble();
+        print('🔍 Checkout: Item $i using price: $itemAmount');
+      } else if (item['unitPrice'] != null && item['quantity'] != null) {
+        // Calculate from unitPrice * quantity
+        final unitPrice = (item['unitPrice'] as num).toDouble();
+        final quantity = (item['quantity'] as num).toDouble();
+        itemAmount = unitPrice * quantity;
+        print(
+            '🔍 Checkout: Item $i calculated from unitPrice * quantity: $unitPrice * $quantity = $itemAmount');
+      } else {
+        // Fallback: Use default price if no price data available
+        final quantity = (item['quantity'] ?? 1) as num;
+        itemAmount = 50.0 * quantity.toDouble(); // Default price of 50 per item
+        print(
+            '🔍 Checkout: Item $i using default price (50.0 * $quantity = $itemAmount)');
+      }
+
+      print('🔍 Checkout: Item $i final amount: $itemAmount');
+      total += itemAmount;
+    }
+
+    print('🔍 Checkout: Final subtotal: $total');
+    return total;
+  }
+
+  double get _itemDiscountAmount =>
+      _cartItems.fold(0.0, (sum, item) => sum + (item['discount'] ?? 0.0));
   double get _totalDiscountAmount => _itemDiscountAmount + _discountAmount;
   double get _tax =>
       (_subtotal - _totalDiscountAmount) * 0.05; // 5% tax on discounted amount
@@ -438,97 +488,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     _notesController.dispose();
     _discountCodeController.dispose();
     super.dispose();
-  }
-
-  Future<void> _processPayment() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() {
-      _isProcessing = true;
-      _error = null;
-    });
-
-    try {
-      PaymentResult result;
-
-      switch (_selectedPaymentMethod) {
-        case 'stripe_card':
-          result = await _paymentService.processStripePayment(
-            amount: _total,
-            currency: 'USD',
-            customerEmail: _customerEmailController.text,
-            customerName: _customerNameController.text,
-          );
-          break;
-
-        case 'paypal':
-          result = await _paymentService.processPayPalPayment(
-            amount: _total,
-            currency: 'USD',
-            customerEmail: _customerEmailController.text,
-          );
-          break;
-
-        case 'cash':
-        case 'bank_transfer':
-          // For cash and bank transfer, we'll simulate success
-          result = PaymentResult(
-            success: true,
-            transactionId: _generateTransactionReference(),
-            message:
-                'Payment method selected: ${_getPaymentMethodName(_selectedPaymentMethod)}',
-            paymentMethod: _selectedPaymentMethod,
-          );
-          break;
-
-        default:
-          result = PaymentResult(
-            success: false,
-            message: 'Unsupported payment method',
-            paymentMethod: _selectedPaymentMethod,
-          );
-      }
-
-      if (result.success) {
-        // Process checkout with API
-        await _apiService.clearCart();
-
-        if (mounted) {
-          // Show success dialog
-          _showPaymentSuccessDialog(result.transactionId!);
-        }
-      } else {
-        setState(() {
-          _error = result.message;
-        });
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Payment failed: ${result.message}'),
-              backgroundColor: AppTheme.errorRed,
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      setState(() {
-        _error = e.toString();
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Payment error: ${e.toString()}'),
-            backgroundColor: AppTheme.errorRed,
-          ),
-        );
-      }
-    } finally {
-      setState(() {
-        _isProcessing = false;
-      });
-    }
   }
 
   String _getPaymentMethodName(String methodId) {
@@ -1283,10 +1242,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ),
           const SizedBox(height: 20),
 
-          // Medicine breakdown
-          ...(_cartItems
-              .map((item) => _buildMedicineBreakdown(item, theme))
-              .toList()),
+          // Grouped medicine breakdown
+          ..._buildGroupedMedicines(theme),
 
           const SizedBox(height: 16),
           Container(
@@ -1310,6 +1267,242 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
+  List<Widget> _buildGroupedMedicines(ThemeData theme) {
+    // Extract all medicines from all items
+    List<Map<String, dynamic>> allMedicines = [];
+
+    print('🔍 Checkout: Processing ${_cartItems.length} cart items');
+
+    for (var item in _cartItems) {
+      print(
+          '🔍 Checkout: Item type: ${item['type']}, has medicines: ${item['medicines'] != null}');
+
+      if (item['type'] == 'invoice' && item['medicines'] != null) {
+        // Add medicines from invoice
+        final medicines = item['medicines'] as List;
+        print(
+            '🔍 Checkout: Processing ${medicines.length} medicines from invoice');
+
+        for (var medicine in medicines) {
+          print(
+              '🔍 Checkout: Medicine: ${medicine['name']}, Price: ${medicine['price']}, Quantity: ${medicine['quantity']}');
+
+          allMedicines.add({
+            ...medicine,
+            'sourceInvoice': item['invoiceNumber'] ?? item['transactionNumber'],
+            'sourcePharmacy': item['pharmacyName'] ?? 'Pharmacy',
+            // Ensure price is available
+            'price': medicine['price'] ?? medicine['unitPrice'] ?? 50.0,
+          });
+        }
+      } else {
+        // Add individual medicine
+        print(
+            '🔍 Checkout: Adding individual medicine: ${item['name']}, Price: ${item['price']}');
+        allMedicines.add({
+          ...item,
+          'sourceInvoice': 'Individual',
+          'sourcePharmacy': 'Direct',
+          // Ensure price is available
+          'price': item['price'] ?? item['unitPrice'] ?? 50.0,
+        });
+      }
+    }
+
+    print('🔍 Checkout: Total medicines extracted: ${allMedicines.length}');
+
+    // Group medicines by name and form
+    Map<String, List<Map<String, dynamic>>> groupedMedicines = {};
+
+    for (var medicine in allMedicines) {
+      final String key =
+          '${medicine['name']}_${medicine['form']}_${medicine['genericName']}';
+
+      if (!groupedMedicines.containsKey(key)) {
+        groupedMedicines[key] = [];
+      }
+      groupedMedicines[key]!.add(medicine);
+    }
+
+    // Build widgets for grouped medicines
+    List<Widget> widgets = [];
+
+    groupedMedicines.forEach((key, medicines) {
+      if (medicines.length == 1) {
+        // Single medicine - show as individual
+        widgets.add(_buildMedicineItemBreakdown(medicines.first, theme));
+      } else {
+        // Multiple same medicines - show as grouped
+        widgets.add(_buildGroupedMedicineItem(medicines, theme));
+      }
+    });
+
+    return widgets;
+  }
+
+  Widget _buildGroupedMedicineItem(
+      List<Map<String, dynamic>> medicines, ThemeData theme) {
+    // Calculate total quantity and price
+    int totalQuantity = medicines.fold(
+        0, (sum, medicine) => sum + ((medicine['quantity'] ?? 1) as int));
+    double totalPrice = medicines.fold(
+        0.0,
+        (sum, medicine) =>
+            sum +
+            ((medicine['price'] ?? medicine['unitPrice'] ?? 0.0) *
+                (medicine['quantity'] ?? 1)));
+
+    // Get sources
+    Set<String> sources =
+        medicines.map((m) => m['sourceInvoice'] as String).toSet();
+    String sourceText = sources.length == 1
+        ? 'From ${medicines.first['sourcePharmacy']}'
+        : 'From ${sources.length} sources';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppTheme.primaryTeal.withOpacity(0.05),
+            AppTheme.primaryTeal.withOpacity(0.02),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.primaryTeal.withOpacity(0.3)),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.primaryTeal.withOpacity(0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Medicine Header
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryTeal.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.medication,
+                  color: AppTheme.primaryTeal,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      medicines.first['name'] ??
+                          medicines.first['medicineName'] ??
+                          medicines.first['genericName'] ??
+                          'Unknown Medicine',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.primaryTeal,
+                      ),
+                    ),
+                    Text(
+                      '${medicines.first['genericName'] ?? medicines.first['activeIngredient'] ?? 'N/A'} • ${medicines.first['form'] ?? 'Tablet'}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    Text(
+                      sourceText,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.grey[500],
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    'Qty: $totalQuantity',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.darkGray,
+                    ),
+                  ),
+                  Text(
+                    '\$${totalPrice.toStringAsFixed(2)}',
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.successGreen,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          // Breakdown of sources
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.7),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey[200]!),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Breakdown:',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.darkGray,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                ...medicines
+                    .map((medicine) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Row(
+                            children: [
+                              Text(
+                                '${medicine['sourceInvoice']}: ',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                              Text(
+                                '${medicine['quantity']} × \$${(medicine['price'] ?? medicine['unitPrice'] ?? 0.0).toStringAsFixed(2)} = \$${((medicine['price'] ?? medicine['unitPrice'] ?? 0.0) * (medicine['quantity'] ?? 1)).toStringAsFixed(2)}',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  fontWeight: FontWeight.w500,
+                                  color: AppTheme.darkGray,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ))
+                    .toList(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildMedicineBreakdown(Map<String, dynamic> item, ThemeData theme) {
     final String itemType = item['type'] ?? 'medicine';
 
@@ -1321,6 +1514,154 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   Widget _buildMedicineItemBreakdown(
+      Map<String, dynamic> item, ThemeData theme) {
+    final itemTotal =
+        (item['price'] ?? item['unitPrice'] ?? 50.0) * (item['quantity'] ?? 1);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.grey[50]!,
+            Colors.grey[100]!.withOpacity(0.5),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Medicine Image
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: item['imageUrl'] != null
+                      ? Image.network(
+                          item['imageUrl'],
+                          width: 60,
+                          height: 60,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              color: AppTheme.primaryTeal.withOpacity(0.1),
+                              child: Icon(
+                                Icons.medication,
+                                color: AppTheme.primaryTeal,
+                                size: 24,
+                              ),
+                            );
+                          },
+                        )
+                      : Container(
+                          color: AppTheme.primaryTeal.withOpacity(0.1),
+                          child: Icon(
+                            Icons.medication,
+                            color: AppTheme.primaryTeal,
+                            size: 24,
+                          ),
+                        ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item['name'] ?? item['medicineName'] ?? 'N/A',
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.darkGray,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${item['genericName']} • ${item['form']}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    Text(
+                      '${item['manufacturer']} • ${item['packSize']}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primaryTeal.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      'Qty: ${item['quantity'] ?? 1}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.primaryTeal,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '\$${(item['price'] ?? item['unitPrice'] ?? 50.0).toStringAsFixed(2)} each',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '\$${itemTotal.toStringAsFixed(2)}',
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.primaryTeal,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMedicineItemBreakdownOriginal(
       Map<String, dynamic> item, ThemeData theme) {
     final itemTotal = (item['price'] ?? 0.0) * (item['quantity'] ?? 1);
 
@@ -2134,7 +2475,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     ],
                   ),
                   child: ElevatedButton.icon(
-                    onPressed: _isProcessing ? null : _processPayment,
+                    onPressed:
+                        _isProcessing ? null : _processPaymentWithBackend,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.transparent,
                       foregroundColor: Colors.white,
@@ -2171,6 +2513,430 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  // Add checkout notification to home screen
+  Future<void> _addCheckoutNotificationToHome(String transactionId) async {
+    try {
+      // Calculate total items and amount
+      num totalItems = 0;
+      double totalAmount = 0;
+      List<String> medicineNames = [];
+
+      for (var item in _cartItems) {
+        final List<Map<String, dynamic>> medicines;
+
+        if (item['medicines'] != null && item['medicines'] is List) {
+          medicines = List<Map<String, dynamic>>.from(item['medicines']);
+        } else {
+          medicines = [item];
+        }
+
+        for (var medicine in medicines) {
+          totalItems += medicine['quantity'] ?? 1;
+          totalAmount += (medicine['price'] ?? medicine['unitPrice'] ?? 50.0) *
+              (medicine['quantity'] ?? 1);
+          medicineNames
+              .add(medicine['name'] ?? medicine['medicineName'] ?? 'Unknown');
+        }
+      }
+
+      // Create checkout notification for home screen
+      final checkoutNotification = {
+        'type': 'checkout',
+        'title': 'Checkout Completed',
+        'message':
+            'Invoice checkout completed! $totalItems items sold for \$${totalAmount.toStringAsFixed(2)}',
+        'transactionId': transactionId,
+        'totalItems': totalItems,
+        'totalAmount': totalAmount,
+        'medicineNames': medicineNames.take(3).join(', '),
+        'priority': 'high',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+
+      // Send to API
+      await _apiService.createNotification(checkoutNotification);
+
+      print(
+          '🔔 Checkout notification sent to home: $totalItems items, \$${totalAmount.toStringAsFixed(2)}');
+    } catch (e) {
+      print('❌ Error sending checkout notification to home: $e');
+    }
+  }
+
+  // Send sale notification to home screen
+  Future<void> _sendSaleNotificationToHome(String transactionId) async {
+    try {
+      // Calculate total items sold
+      num totalItems = 0;
+      double totalAmount = 0;
+      List<String> medicineNames = [];
+
+      for (var item in _cartItems) {
+        final List<Map<String, dynamic>> medicines;
+
+        if (item['medicines'] != null && item['medicines'] is List) {
+          medicines = List<Map<String, dynamic>>.from(item['medicines']);
+        } else {
+          medicines = [item];
+        }
+
+        for (var medicine in medicines) {
+          totalItems += medicine['quantity'] ?? 1;
+          totalAmount += (medicine['price'] ?? 0) * (medicine['quantity'] ?? 1);
+          medicineNames.add(medicine['name'] ?? 'Unknown');
+        }
+      }
+
+      // Create sale notification
+      final saleNotification = {
+        'type': 'sale',
+        'title': 'Sale Completed',
+        'message':
+            'Invoice sold successfully! $totalItems items for \$${totalAmount.toStringAsFixed(2)}',
+        'transactionId': transactionId,
+        'totalItems': totalItems,
+        'totalAmount': totalAmount,
+        'medicineNames':
+            medicineNames.take(3).join(', '), // Show first 3 medicines
+        'priority': 'medium',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+
+      // Send to API
+      await _apiService.createNotification(saleNotification);
+
+      // Show immediate notification
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                '💰 Sale Completed: $totalItems items sold for \$${totalAmount.toStringAsFixed(2)}'),
+            backgroundColor: AppTheme.successGreen,
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'View',
+              textColor: Colors.white,
+              onPressed: () {
+                Navigator.of(context).pushNamed('/sales');
+              },
+            ),
+          ),
+        );
+      }
+
+      print(
+          '🔔 Sale notification sent to home: $totalItems items, \$${totalAmount.toStringAsFixed(2)}');
+    } catch (e) {
+      print('❌ Error sending sale notification to home: $e');
+    }
+  }
+
+  Future<void> _sendNotifications(String transactionId) async {
+    try {
+      print('🔔 Checkout: Sending notifications...');
+
+      // Send sale notification to home screen
+      await _sendSaleNotificationToHome(transactionId);
+
+      // 1. Send Sale Notification (إشعار بيع)
+      for (var item in _cartItems) {
+        final List<Map<String, dynamic>> medicines;
+
+        if (item['medicines'] != null && item['medicines'] is List) {
+          medicines = List<Map<String, dynamic>>.from(item['medicines']);
+        } else {
+          // Handle single medicine
+          medicines = [item];
+        }
+
+        for (var medicine in medicines) {
+          // Get medicine details
+          final dynamic tempMedicineId =
+              medicine['id']?['_id'] ?? medicine['medicineId'];
+          final String? medicineId =
+              (tempMedicineId is Map && tempMedicineId.containsKey('_id'))
+                  ? tempMedicineId['_id']?.toString()
+                  : tempMedicineId?.toString();
+
+          if (medicineId == null) continue;
+
+          try {
+            // Get medicine details from backend
+            final medicineData = await _apiService.getMedicineById(medicineId);
+            final currentStock =
+                medicineData['quantity'] ?? medicineData['stock'] ?? 0;
+
+            // 1. Sale Notification - إشعار بيع
+            await _apiService.createNotification({
+              'type': 'sale',
+              'title': 'Sale Completed',
+              'message': 'Someone purchased ${medicine['name'] ?? 'medicine'}',
+              'transactionId': transactionId,
+              'medicineId': medicineId,
+              'medicineName': medicine['name'],
+              'quantity': medicine['quantity'] ?? 1,
+              'amount': _total,
+              'priority': 'medium',
+              'timestamp': DateTime.now().toIso8601String(),
+            });
+
+            // Show immediate sale notification
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content:
+                      Text('💰 Sale: ${medicine['name']} sold successfully!'),
+                  backgroundColor: AppTheme.successGreen,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            }
+
+            // 2. Low Stock Notification - إشعار مخزون منخفض
+            if (currentStock < 10) {
+              await _apiService.createNotification({
+                'type': 'low_stock',
+                'title': 'Low Stock Alert',
+                'message':
+                    '${medicine['name'] ?? 'Medicine'} is running low on stock ($currentStock remaining)',
+                'medicineId': medicineId,
+                'medicineName': medicine['name'],
+                'currentStock': currentStock,
+                'threshold': 10,
+                'priority': currentStock <= 3 ? 'high' : 'medium',
+                'timestamp': DateTime.now().toIso8601String(),
+              });
+
+              // Show immediate low stock notification
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                        '⚠️ Low Stock: ${medicine['name']} (${currentStock} remaining)'),
+                    backgroundColor: Colors.orange,
+                    duration: const Duration(seconds: 4),
+                  ),
+                );
+              }
+
+              print('🔔 Low stock notification sent for ${medicine['name']}');
+            }
+          } catch (e) {
+            print('❌ Error checking medicine stock: $e');
+          }
+        }
+      }
+
+      print('🔔 All notifications sent successfully');
+    } catch (e) {
+      print('❌ Error sending notifications: $e');
+      // Don't fail the checkout if notifications fail
+    }
+  }
+
+  Future<void> _processPaymentWithBackend() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    setState(() {
+      _isProcessing = true;
+    });
+
+    try {
+      print('💳 Checkout: Starting payment process...');
+
+      // Extract medicines from cart items with proper validation
+      List<Map<String, dynamic>> medicines = [];
+      for (var item in _cartItems) {
+        if (item['medicines'] != null && item['medicines'] is List) {
+          // Handle invoice with multiple medicines
+          for (var medicine in item['medicines']) {
+            final dynamic tempMedicineId =
+                medicine['id']?['_id'] ?? medicine['medicineId'];
+            final String? medicineId =
+                (tempMedicineId is Map && tempMedicineId.containsKey('_id'))
+                    ? tempMedicineId['_id']?.toString()
+                    : tempMedicineId?.toString();
+            final quantity = medicine['quantity'] ?? 1;
+            final unitPrice = medicine['price'] ?? medicine['unitPrice'] ?? 0.0;
+
+            // Validate required fields
+            if (medicineId == null || medicineId.toString().isEmpty) {
+              throw Exception('Medicine ID is required for all items');
+            }
+
+            if (quantity < 1) {
+              throw Exception('Quantity must be at least 1 for all items');
+            }
+
+            medicines.add({
+              'medicineId': medicineId,
+              'quantity': quantity,
+              'unitPrice': unitPrice,
+            });
+          }
+        } else {
+          // Handle individual medicine
+          final dynamic tempMedicineId = item['medicineId'];
+          final String? medicineId =
+              (tempMedicineId is Map && tempMedicineId.containsKey('_id'))
+                  ? tempMedicineId['_id']?.toString()
+                  : tempMedicineId?.toString();
+          final quantity = item['quantity'] ?? 1;
+          final unitPrice = item['unitPrice'] ?? item['price'] ?? 0.0;
+
+          // Validate required fields
+          if (medicineId == null || medicineId.toString().isEmpty) {
+            throw Exception('Medicine ID is required for all items');
+          }
+
+          if (quantity < 1) {
+            throw Exception('Quantity must be at least 1 for all items');
+          }
+
+          medicines.add({
+            'medicineId': medicineId,
+            'quantity': quantity,
+            'unitPrice': unitPrice,
+          });
+        }
+      }
+
+      // Validate that we have at least one medicine
+      if (medicines.isEmpty) {
+        throw Exception('No medicines found in cart');
+      }
+
+      print(
+          '💳 Checkout: Prepared ${medicines.length} medicines for transaction');
+
+      // Create transaction data according to backend requirements
+      final transactionData = {
+        'transactionType': 'sale', // Required
+        'description': 'Sale transaction from checkout', // Optional
+        'items': medicines, // Required - Array of medicines
+        'customerName': _customerNameController.text.trim().isNotEmpty
+            ? _customerNameController.text.trim()
+            : null, // Optional
+        'customerPhone': _customerPhoneController.text.trim().isNotEmpty
+            ? _customerPhoneController.text.trim()
+            : null, // Optional
+        'paymentMethod': _selectedPaymentMethod, // Optional
+        'tax': _tax, // Optional
+        'discount': _discountAmount, // Optional
+        'status': 'completed' // Optional
+      };
+
+      print('💳 Checkout: Creating transaction in backend...');
+      print('💳 Transaction data: ${transactionData}');
+
+      // Create transaction in backend
+      final result = await _apiService.createTransaction(transactionData);
+
+      print('💳 Checkout: Transaction created successfully');
+      print('💳 Transaction ID: ${result['data']['_id']}');
+
+      // Remove the original transaction from Market (if it exists)
+      // This prevents the transaction from appearing in Market after checkout
+      final originalTransactionId = _cartItems.isNotEmpty
+          ? _cartItems.first['_id'] ?? _cartItems.first['transactionId']
+          : null;
+
+      if (originalTransactionId != null) {
+        print(
+            '🗑️ Checkout: Removing original transaction from Market: $originalTransactionId');
+        try {
+          await _apiService.removeFromCart(originalTransactionId);
+          print('✅ Checkout: Original transaction removed from Market');
+        } catch (e) {
+          print(
+              '⚠️ Checkout: Failed to remove original transaction from Market: $e');
+          // Don't fail the checkout if this fails
+        }
+      }
+
+      // Send notifications after successful checkout
+      await _sendNotifications(result['data']['_id'] ?? 'Unknown');
+
+      // Add local notification to home screen
+      await _addCheckoutNotificationToHome(result['data']['_id'] ?? 'Unknown');
+
+      // Clear cart after successful transaction
+      await _apiService.clearCart();
+
+      print('💳 Checkout: Cart cleared successfully');
+
+      if (mounted) {
+        // Show success dialog
+        _showPaymentSuccessDialogNew(result['data']['_id'] ?? 'Unknown');
+      }
+    } catch (e) {
+      print('❌ Checkout: Payment error: $e');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Payment error: $e'),
+            backgroundColor: AppTheme.errorRed,
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: _processPaymentWithBackend,
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+        });
+      }
+    }
+  }
+
+  void _showPaymentSuccessDialogNew(String transactionId) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) =>
+          _PaymentSuccessDialogNew(transactionId: transactionId),
+    );
+  }
+
+  Widget _PaymentSuccessDialogNew({required String transactionId}) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          Icon(Icons.check_circle, color: Colors.green, size: 28),
+          SizedBox(width: 8),
+          Text('Payment Successful!'),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Transaction completed successfully!'),
+          SizedBox(height: 8),
+          Text('Transaction ID:',
+              style: TextStyle(fontWeight: FontWeight.bold)),
+          Text(transactionId, style: TextStyle(fontFamily: 'monospace')),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            Navigator.of(context).pop();
+            Navigator.of(context).pop(); // Go back to previous screen
+          },
+          child: Text('OK'),
+        ),
+      ],
     );
   }
 

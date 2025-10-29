@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:recyleto_app/l10n/app_localizations.dart';
 
+import '../../services/api_service.dart';
 import '../../utils/app_theme.dart';
 
 class TransactionDetailScreen extends StatefulWidget {
@@ -17,17 +18,121 @@ class TransactionDetailScreen extends StatefulWidget {
 }
 
 class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
-  Map<String, dynamic> get _transaction => widget.transaction;
+  final ApiService _apiService = ApiService();
+  Map<String, dynamic>? _transaction;
+  bool _isLoading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTransactionDetails();
+  }
+
+  Future<void> _loadTransactionDetails() async {
+    try {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+
+      await _apiService.initialize();
+
+      // Get transaction ID from the passed transaction
+      final transactionId = widget.transaction['_id'] ??
+          widget.transaction['transactionId'] ??
+          widget.transaction['id'];
+
+      if (transactionId == null) {
+        throw Exception('Transaction ID not found');
+      }
+
+      // Load detailed transaction from API
+      final transactions = await _apiService.getTransactions();
+      final detailedTransaction = transactions.firstWhere(
+        (tx) =>
+            tx['_id'] == transactionId ||
+            tx['transactionId'] == transactionId ||
+            tx['id'] == transactionId,
+        orElse: () => widget.transaction, // Fallback to passed transaction
+      );
+
+      setState(() {
+        _transaction = detailedTransaction;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _transaction = widget.transaction; // Fallback to passed transaction
+        _isLoading = false;
+      });
+    }
+  }
+
+  Map<String, dynamic> get _transactionData =>
+      _transaction ?? widget.transaction;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    if (_isLoading) {
+      return Scaffold(
+        backgroundColor: theme.colorScheme.surface,
+        appBar: AppBar(
+          title: Text(AppLocalizations.of(context)!.transaction),
+        ),
+        body: const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    if (_error != null) {
+      return Scaffold(
+        backgroundColor: theme.colorScheme.surface,
+        appBar: AppBar(
+          title: Text(AppLocalizations.of(context)!.transaction),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.error_outline,
+                size: 64,
+                color: Colors.red[300],
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Error loading transaction details',
+                style: theme.textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: Colors.grey[600],
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _loadTransactionDetails,
+                child: Text(AppLocalizations.of(context)!.retry),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
         title: Text(
-            '${AppLocalizations.of(context)!.transaction} #${_transaction['transactionId'] ?? _transaction['transactionReference'] ?? _transaction['id'] ?? 'Unknown'}'),
+            '${AppLocalizations.of(context)!.transaction} #${_transactionData['transactionId'] ?? _transactionData['transactionReference'] ?? _transactionData['id'] ?? 'Unknown'}'),
         actions: [
           IconButton(
             icon: const Icon(Icons.share),
@@ -63,10 +168,10 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
             const SizedBox(height: 16),
 
             // Transaction Notes
-            if ((_transaction['notes'] != null &&
-                    _transaction['notes'].toString().isNotEmpty) ||
-                (_transaction['description'] != null &&
-                    _transaction['description'].toString().isNotEmpty))
+            if ((_transactionData['notes'] != null &&
+                    _transactionData['notes'].toString().isNotEmpty) ||
+                (_transactionData['description'] != null &&
+                    _transactionData['description'].toString().isNotEmpty))
               _buildTransactionNotes(theme),
 
             const SizedBox(height: 16),
@@ -83,7 +188,7 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
     Color statusColor;
     IconData statusIcon;
 
-    switch (_transaction['status']) {
+    switch (_transactionData['status']) {
       case 'completed':
         statusColor = AppTheme.successGreen;
         statusIcon = Icons.check_circle;
@@ -102,7 +207,7 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
     }
 
     final transactionDate = DateTime.parse(
-        _transaction['createdAt'] ?? DateTime.now().toIso8601String());
+        _transactionData['createdAt'] ?? DateTime.now().toIso8601String());
     final formattedDate =
         '${transactionDate.year}-${transactionDate.month.toString().padLeft(2, '0')}-${transactionDate.day.toString().padLeft(2, '0')}';
     final formattedTime =
@@ -128,7 +233,7 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  (_transaction['status'] ?? 'pending')
+                  (_transactionData['status'] ?? 'pending')
                       .toString()
                       .toUpperCase(),
                   style: theme.textTheme.titleMedium?.copyWith(
@@ -181,20 +286,20 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
           const SizedBox(height: 16),
           _buildInfoRow(
               AppLocalizations.of(context)!.name,
-              _transaction['customerInfo']?['name'] ??
-                  _transaction['customerName'] ??
+              _transactionData['customerInfo']?['name'] ??
+                  _transactionData['customerName'] ??
                   AppLocalizations.of(context)!.anonymous,
               theme),
-          if ((_transaction['customerInfo']?['phone'] != null &&
-                  _transaction['customerInfo']!['phone']
+          if ((_transactionData['customerInfo']?['phone'] != null &&
+                  _transactionData['customerInfo']!['phone']
                       .toString()
                       .isNotEmpty) ||
-              (_transaction['customerPhone'] != null &&
-                  _transaction['customerPhone'].toString().isNotEmpty))
+              (_transactionData['customerPhone'] != null &&
+                  _transactionData['customerPhone'].toString().isNotEmpty))
             _buildInfoRow(
                 AppLocalizations.of(context)!.phone,
-                _transaction['customerInfo']?['phone'] ??
-                    _transaction['customerPhone'].toString(),
+                _transactionData['customerInfo']?['phone'] ??
+                    _transactionData['customerPhone'].toString(),
                 theme),
         ],
       ),
@@ -202,7 +307,7 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
   }
 
   Widget _buildOrderItems(ThemeData theme) {
-    final items = _transaction['items'] ?? [];
+    final items = _transactionData['items'] ?? [];
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -332,10 +437,11 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
   }
 
   Widget _buildPaymentSummary(ThemeData theme) {
-    final subtotal = _transaction['subtotal'] ?? 0.0;
-    final tax = _transaction['tax'] ?? 0.0;
-    final total = _transaction['totalAmount'] ?? _transaction['total'] ?? 0.0;
-    final paymentMethod = _transaction['paymentMethod'] ?? 'Cash';
+    final subtotal = _transactionData['subtotal'] ?? 0.0;
+    final tax = _transactionData['tax'] ?? 0.0;
+    final total =
+        _transactionData['totalAmount'] ?? _transactionData['total'] ?? 0.0;
+    final paymentMethod = _transactionData['paymentMethod'] ?? 'Cash';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -515,8 +621,8 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
           ),
           const SizedBox(height: 16),
           Text(
-            _transaction['notes']?.toString() ??
-                _transaction['description']?.toString() ??
+            _transactionData['notes']?.toString() ??
+                _transactionData['description']?.toString() ??
                 '',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurface.withOpacity(0.8),
